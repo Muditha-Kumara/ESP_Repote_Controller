@@ -22,23 +22,18 @@ build/
 *.o
 *.a
 *.out
-*.exe # For any host-side utilities compiled on Windows
+*.exe
 
 # ESP-IDF specific build outputs
 *.bin
 *.elf
 *.map
-flasher_args.json # Generated in build directory
-# sdkconfig.old
-# sdkconfig
+flasher_args.json
+sdkconfig.old
 
 # ESP-IDF dependencies
-# For older versions or manual component management
-/components/.idf/
 **/components/.idf/
-# For modern ESP-IDF component manager
 managed_components/
-# If ESP-IDF tools are installed/referenced locally to the project
 .espressif/
 
 # CMake generated files
@@ -47,6 +42,7 @@ CMakeFiles/
 cmake_install.cmake
 install_manifest.txt
 CTestTestfile.cmake
+compile_commands.json
 
 # Python environment files
 *.pyc
@@ -61,10 +57,10 @@ venv/
 .venv/
 env/
 
-# Language Servers
+# Language servers and IDE state
 .clangd/
 .ccls-cache/
-compile_commands.json
+.vscode/
 
 # Windows specific
 Thumbs.db
@@ -73,6 +69,6 @@ Desktop.ini
 
 # User-specific configuration files
 *.user
-*.workspace # General workspace files, can be from various tools
-*.suo       # Visual Studio Solution User Options
-*.sln.docstates # Visual Studio
+*.workspace
+*.suo
+*.sln.docstates
