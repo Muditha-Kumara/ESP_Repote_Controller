@@ -137,6 +137,12 @@ void app_main(void)
     }
     ESP_LOGI(TAG, "✓ WiFi initialization started");
 
+    // Initialize mDNS early so it is ready when the STA gets an IP address.
+    if (wifi_mdns_init(MDNS_HOSTNAME, WEB_SERVER_PORT) != 0)
+    {
+        ESP_LOGW(TAG, "mDNS startup failed, continuing without hostname discovery");
+    }
+
     // Wait for WiFi connection
     int retry_count = 0;
     while (!wifi_is_connected() && retry_count < 50) {
@@ -146,11 +152,6 @@ void app_main(void)
 
     if (wifi_is_connected()) {
         ESP_LOGI(TAG, "✓ WiFi connected: %s", wifi_get_local_ip());
-
-        // Initialize mDNS
-        if (mdns_init(MDNS_HOSTNAME) == 0) {
-            ESP_LOGI(TAG, "✓ mDNS initialized: %s.local", MDNS_HOSTNAME);
-        }
     } else {
         ESP_LOGW(TAG, "⚠ WiFi connection timeout, proceeding with ESP-NOW only");
     }

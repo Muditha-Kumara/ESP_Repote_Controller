@@ -2,6 +2,7 @@
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
+#include "mdns.h"
 #include "esp_log.h"
 #include <string.h>
 
@@ -10,6 +11,8 @@ static const char *TAG = "WIFI_CONFIG";
 // WiFi connection status
 static uint8_t wifi_connected = 0;
 static char local_ip[16] = "0.0.0.0";
+static esp_netif_t *sta_netif = NULL;
+static uint8_t mdns_started = 0;
 
 /**
  * WiFi event handler
@@ -23,12 +26,20 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         ESP_LOGW(TAG, "WiFi disconnected, retrying...");
         wifi_connected = 0;
+        if (mdns_started && sta_netif != NULL)
+        {
+            mdns_netif_action(sta_netif, MDNS_EVENT_DISABLE_IP4);
+        }
         esp_wifi_connect();
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         snprintf(local_ip, sizeof(local_ip), IPSTR, IP2STR(&event->ip_info.ip));
         ESP_LOGI(TAG, "WiFi connected! IP: %s", local_ip);
         wifi_connected = 1;
+        if (mdns_started && sta_netif != NULL)
+        {
+            mdns_netif_action(sta_netif, MDNS_EVENT_ANNOUNCE_IP4);
+        }
     }
 }
 
@@ -59,7 +70,7 @@ int wifi_init(const char *ssid, const char *password)
     // Create the default WiFi station interface if it does not already exist.
     static bool sta_netif_created = false;
     if (!sta_netif_created) {
-        esp_netif_create_default_wifi_sta();
+        sta_netif = esp_netif_create_default_wifi_sta();
         sta_netif_created = true;
     }
 
@@ -117,15 +128,60 @@ int wifi_init(const char *ssid, const char *password)
 /**
  * Initialize mDNS service
  */
-int mdns_init(const char *hostname)
+int wifi_mdns_init(const char *hostname, uint16_t port)
 {
-    if (hostname == NULL) {
+    if (hostname == NULL || hostname[0] == '\0' || port == 0)
+    {
         ESP_LOGE(TAG, "Invalid hostname");
         return -1;
     }
-    // mDNS support is optional in ESP-IDF 6.0
-    // It can be enabled via "idf.py menuconfig" under "mDNS"
-    // For now, we skip mDNS if not available
+
+    esp_err_t ret = mdns_init();
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE)
+    {
+        ESP_LOGE(TAG, "mDNS init failed: %s", esp_err_to_name(ret));
+        return -1;
+    }
+
+    mdns_started = 1;
+
+    if (sta_netif != NULL)
+    {
+        ret = mdns_register_netif(sta_netif);
+        if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE)
+        {
+            ESP_LOGE(TAG, "Failed to register STA netif with mDNS: %s", esp_err_to_name(ret));
+            return -1;
+        }
+    }
+
+    ret = mdns_hostname_set(hostname);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Failed to set mDNS hostname: %s", esp_err_to_name(ret));
+        return -1;
+    }
+
+    ret = mdns_instance_name_set("TransMeter");
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Failed to set mDNS instance name: %s", esp_err_to_name(ret));
+        return -1;
+    }
+
+    ret = mdns_service_add(NULL, "_http", "_tcp", port, NULL, 0);
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE)
+    {
+        ESP_LOGE(TAG, "Failed to add mDNS HTTP service: %s", esp_err_to_name(ret));
+        return -1;
+    }
+
+    if (sta_netif != NULL && wifi_connected)
+    {
+        mdns_netif_action(sta_netif, MDNS_EVENT_ENABLE_IP4);
+        mdns_netif_action(sta_netif, MDNS_EVENT_ANNOUNCE_IP4);
+    }
+
     ESP_LOGI(TAG, "mDNS initialized: %s.local", hostname);
     return 0;
 }

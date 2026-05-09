@@ -1,6 +1,8 @@
 #ifndef WIFI_CONFIG_H
 #define WIFI_CONFIG_H
 
+#include <stdint.h>
+
 /**
  * Initialize WiFi connection with provided credentials
  * @param ssid: WiFi SSID
@@ -12,9 +14,10 @@ int wifi_init(const char *ssid, const char *password);
 /**
  * Initialize mDNS service
  * @param hostname: mDNS hostname (e.g., "transmeter")
+ * @param port: HTTP service port to advertise
  * @return 0 on success, -1 on error
  */
-int mdns_init(const char *hostname);
+int wifi_mdns_init(const char *hostname, uint16_t port);
 
 /**
  * Get current WiFi connection status
