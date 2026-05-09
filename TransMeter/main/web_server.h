@@ -23,9 +23,14 @@ void web_server_update_settings(const remote_settings_t *settings);
 void web_server_update_motor_data(const motor_control_t *motor_data);
 
 /**
- * Update ADC joystick readings for display
+ * Update drive command received from the web interface
  */
-void web_server_update_adc_values(uint16_t x, uint16_t y, uint16_t x2, uint16_t y2);
+void web_server_update_drive_command(int16_t throttle, int16_t steer, uint8_t armed);
+
+/**
+ * Copy the latest motor command state for transmission
+ */
+void web_server_get_motor_data(motor_control_t *motor_data);
 
 /**
  * Stop web server

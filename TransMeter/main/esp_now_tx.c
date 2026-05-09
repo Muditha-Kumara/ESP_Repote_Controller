@@ -70,6 +70,21 @@ int esp_now_tx_init(uint8_t long_range_enabled, uint8_t wifi_channel)
         ESP_LOGW(TAG, "WiFi channel setting failed: %s — continuing without forcing channel", esp_err_to_name(ret));
     }
 
+    if (long_range_enabled)
+    {
+        ret = esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR);
+        if (ret != ESP_OK)
+        {
+            ESP_LOGW(TAG, "Failed to enable LR protocol: %s", esp_err_to_name(ret));
+        }
+
+        ret = esp_wifi_set_max_tx_power(80);
+        if (ret != ESP_OK)
+        {
+            ESP_LOGW(TAG, "Failed to set max TX power: %s", esp_err_to_name(ret));
+        }
+    }
+
     // Initialize ESP-NOW
     ret = esp_now_init();
     if (ret != ESP_OK) {

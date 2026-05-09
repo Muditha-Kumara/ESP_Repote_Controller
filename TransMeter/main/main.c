@@ -10,7 +10,6 @@
 #include "types.h"
 #include "esp_now_tx.h"
 #include "wifi_config.h"
-#include "joystick.h"
 #include "web_server.h"
 
 static const char *TAG = "TransMeter";
@@ -20,12 +19,6 @@ static const char *TAG = "TransMeter";
 #define WIFI_PASSWORD "slengnet1"
 #define MDNS_HOSTNAME "transmeter"
 #define WIFI_CHANNEL 1
-
-// ADC channels (use new API channel definitions)
-#define JOYSTICK_ADC_CH_X 0        // ADC_CHANNEL_0 - GPIO36
-#define JOYSTICK_ADC_CH_Y 3        // ADC_CHANNEL_3 - GPIO39
-#define JOYSTICK_ADC_CH_X2 6       // ADC_CHANNEL_6 - GPIO34
-#define JOYSTICK_ADC_CH_Y2 7       // ADC_CHANNEL_7 - GPIO35
 
 // Receiver MAC address (modify as needed)
 // This should be the MAC address of your receiver device
@@ -40,7 +33,7 @@ static uint32_t packet_count = 0;
 
 /**
  * Main remote control task
- * Reads joystick and sends ESP-NOW packets
+ * Reads the latest browser command and sends ESP-NOW packets
  */
 static void remote_control_task(void *pvParameters)
 {
@@ -57,30 +50,27 @@ static void remote_control_task(void *pvParameters)
     web_server_update_settings(&settings);
 
     while (1) {
-        // Read joystick and push one update per send interval.
-        if (joystick_read(&motor_data) == 0) {
-            // Update web server with joystick data
-            uint16_t x, y, x2, y2;
-            joystick_get_raw_values(&x, &y, &x2, &y2);
-            web_server_update_adc_values(x, y, x2, y2);
-            web_server_update_motor_data(&motor_data);
+        web_server_get_motor_data(&motor_data);
+        motor_data.timestamp = esp_log_timestamp();
 
-            // Send ESP-NOW packet
-            if (esp_now_tx_send(&motor_data) == 0) {
-                packet_count++;
+        if (esp_now_tx_send(&motor_data) == 0)
+        {
+            packet_count++;
 
-                if (packet_count % 20 == 0) {  // Log every 20 packets
-                    ESP_LOGI(TAG,
-                             "Sent packet #%lu | M1:[%d,%d] M2:[%d,%d]",
-                             packet_count,
-                             motor_data.motor1_speed,
-                             motor_data.motor1_direction,
-                             motor_data.motor2_speed,
-                             motor_data.motor2_direction);
-                }
-            } else {
-                ESP_LOGW(TAG, "Failed to send packet");
+            if (packet_count % 20 == 0)
+            {
+                ESP_LOGI(TAG,
+                         "Sent packet #%lu | M1:[%d,%d] M2:[%d,%d]",
+                         packet_count,
+                         motor_data.motor1_speed,
+                         motor_data.motor1_direction,
+                         motor_data.motor2_speed,
+                         motor_data.motor2_direction);
             }
+        }
+        else
+        {
+            ESP_LOGW(TAG, "Failed to send packet");
         }
 
         vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(SEND_INTERVAL_MS));
@@ -110,6 +100,7 @@ void app_main(void)
     ESP_LOGI(TAG, "========== Remote Controller Transmitter Initialized ==========");
     ESP_LOGI(TAG, "FW Version: 1.0.0");
     ESP_LOGI(TAG, "ESP-NOW Long Range Mode: ENABLED");
+    ESP_LOGI(TAG, "Control Mode: WebSocket drive pad");
     ESP_LOGI(TAG, "Build Date: %s %s", __DATE__, __TIME__);
 
     // Initialize NVS (Non-Volatile Storage)
@@ -119,15 +110,6 @@ void app_main(void)
         nvs_flash_erase();
         nvs_flash_init();
     }
-
-    // Initialize Joystick ADC
-    ESP_LOGI(TAG, "Initializing Joystick ADC...");
-    if (joystick_init(JOYSTICK_ADC_CH_X, JOYSTICK_ADC_CH_Y,
-                      JOYSTICK_ADC_CH_X2, JOYSTICK_ADC_CH_Y2) != 0) {
-        ESP_LOGE(TAG, "Failed to initialize joystick");
-        return;
-    }
-    ESP_LOGI(TAG, "✓ Joystick initialized");
 
     // Initialize WiFi and mDNS
     ESP_LOGI(TAG, "Initializing WiFi (%s)...", WIFI_SSID);
@@ -174,6 +156,7 @@ void app_main(void)
     ESP_LOGI(TAG, "Initializing Web Server on port %d...", WEB_SERVER_PORT);
     if (web_server_init(WEB_SERVER_PORT) == 0) {
         ESP_LOGI(TAG, "✓ Web Server started");
+        web_server_update_drive_command(0, 0, 0);
         if (wifi_is_connected()) {
             ESP_LOGI(TAG, "  Access at: http://%s or http://transmeter.local",
                      wifi_get_local_ip());
