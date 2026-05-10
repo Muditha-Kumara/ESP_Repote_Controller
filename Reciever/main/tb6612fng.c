@@ -21,7 +21,7 @@ static const char *TAG = "TB6612FNG";
 
 #define PWM_FREQ_HZ       20000
 #define PWM_RESOLUTION    LEDC_TIMER_10_BIT
-#define PWM_MAX_DUTY      ((1U << 10) - 1U)
+#define PWM_MAX_DUTY ((1U << 10) - 1U)
 
 static void set_direction(gpio_num_t in1, gpio_num_t in2, int signed_speed)
 {
