@@ -16,6 +16,61 @@ static const char *TAG = "ESPNOW_RX";
 static motor_control_t latest_command = {0};
 static uint32_t last_seen_ms = 0;
 
+static esp_err_t ensure_peer_exists(const uint8_t *peer_addr)
+{
+    if (peer_addr == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (esp_now_is_peer_exist(peer_addr))
+    {
+        return ESP_OK;
+    }
+
+    esp_now_peer_info_t peer = {0};
+    memcpy(peer.peer_addr, peer_addr, ESP_NOW_ETH_ALEN);
+    peer.channel = 1;
+    peer.ifidx = WIFI_IF_STA;
+    peer.encrypt = false;
+    return esp_now_add_peer(&peer);
+}
+
+static void send_receiver_telemetry(const esp_now_recv_info_t *recv_info, const motor_control_t *command)
+{
+    if (recv_info == NULL || recv_info->src_addr == NULL || command == NULL)
+    {
+        return;
+    }
+
+    int8_t rssi_dbm = 0;
+    if (recv_info->rx_ctrl != NULL)
+    {
+        rssi_dbm = recv_info->rx_ctrl->rssi;
+    }
+
+    receiver_telemetry_t telemetry = {
+        .magic = RECEIVER_TELEMETRY_MAGIC,
+        .version = RECEIVER_TELEMETRY_VERSION,
+        .receiver_rssi_dbm = rssi_dbm,
+        .echoed_tx_timestamp = command->timestamp,
+        .receiver_rx_time_us = (uint32_t)(esp_timer_get_time() & 0xFFFFFFFFu),
+    };
+
+    esp_err_t ret = ensure_peer_exists(recv_info->src_addr);
+    if (ret != ESP_OK && ret != ESP_ERR_ESPNOW_EXIST)
+    {
+        ESP_LOGW(TAG, "Failed to add telemetry peer: %s", esp_err_to_name(ret));
+        return;
+    }
+
+    ret = esp_now_send(recv_info->src_addr, (const uint8_t *)&telemetry, sizeof(telemetry));
+    if (ret != ESP_OK)
+    {
+        ESP_LOGW(TAG, "Failed to send telemetry packet: %s", esp_err_to_name(ret));
+    }
+}
+
 static uint32_t now_ms(void)
 {
     return (uint32_t)(esp_timer_get_time() / 1000ULL);
@@ -23,8 +78,6 @@ static uint32_t now_ms(void)
 
 static void recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len)
 {
-    (void)recv_info;
-
     if (data == NULL || len != (int)sizeof(motor_control_t)) {
         ESP_LOGW(TAG, "Ignoring packet with invalid size: %d", len);
         return;
@@ -53,6 +106,7 @@ static void recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, i
     ESP_LOG_BUFFER_HEXDUMP(TAG, data, len, ESP_LOG_DEBUG);
 
     tb6612fng_apply(&latest_command);
+    send_receiver_telemetry(recv_info, &latest_command);
 }
 
 esp_err_t esp_now_rx_init(void)
