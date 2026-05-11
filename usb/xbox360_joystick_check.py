@@ -81,6 +81,8 @@ def main():
 
             elif event.type == ecodes.EV_KEY:
                 key_name = ecodes.BTN.get(event.code, str(event.code))
+                if isinstance(key_name, tuple):
+                    key_name = key_name[0]
                 state = "DOWN" if event.value else "UP"
                 print(f"KEY  {key_name:12} {state}")
 
