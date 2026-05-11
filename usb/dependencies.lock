@@ -3,8 +3,15 @@ dependencies:
     source:
       type: idf
     version: 6.0.1
+  usb:
+    dependencies: []
+    source:
+      path: components/esp_usb/host/usb
+      type: local
+    version: 1.4.0
 direct_dependencies:
+- espressif/usb
 - idf
-manifest_hash: eb7bf0083d6ac62b3029464a53bedd4677ab5a98780358d0d23f9bfcf871db27
+manifest_hash: 26aaa53f3161bfab6bd6e32964d04b5024af03eb7b495eefa451898f03ab1680
 target: esp32s3
 version: 3.0.0
