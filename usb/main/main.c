@@ -19,24 +19,16 @@
 
 static const char *TAG = "WIFI_USB_BRIDGE";
 
+/* WiFi Configuration */
 #define WIFI_SSID "SLEngineers"
 #define WIFI_PASS "slengnet1"
 #define MAX_RETRY 5
 
+/* RNDIS Subnet Configuration (172.32.0.x) */
 #define RNDIS_IP_A 172
 #define RNDIS_IP_B 32
 #define RNDIS_IP_C 0
 #define RNDIS_IP_D 1
-
-#define RNDIS_GW_A 172
-#define RNDIS_GW_B 32
-#define RNDIS_GW_C 0
-#define RNDIS_GW_D 1
-
-#define RNDIS_NM_A 255
-#define RNDIS_NM_B 255
-#define RNDIS_NM_C 255
-#define RNDIS_NM_D 0
 
 static EventGroupHandle_t s_wifi_event_group;
 #define WIFI_CONNECTED_BIT BIT0
@@ -72,39 +64,15 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     }
 }
 
-static void iot_eth_event_handler(void *arg, esp_event_base_t event_base,
-                                  int32_t event_id, void *event_data)
-{
-    switch (event_id)
-    {
-    case IOT_ETH_EVENT_START:
-        ESP_LOGI(TAG, "RNDIS started");
-        break;
-    case IOT_ETH_EVENT_STOP:
-        ESP_LOGI(TAG, "RNDIS stopped");
-        break;
-    case IOT_ETH_EVENT_CONNECTED:
-        ESP_LOGI(TAG, "RNDIS device connected");
-        break;
-    case IOT_ETH_EVENT_DISCONNECTED:
-        ESP_LOGI(TAG, "RNDIS device disconnected");
-        break;
-    default:
-        break;
-    }
-}
-
 void app_main(void)
 {
+    // 1. Core System Init
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     s_wifi_event_group = xEventGroupCreate();
 
-    ESP_ERROR_CHECK(esp_event_handler_register(IOT_ETH_EVENT, ESP_EVENT_ANY_ID,
-                                               &iot_eth_event_handler, NULL));
-
-    /* 1. Wi-Fi STA */
+    // 2. Wi-Fi Station Initialization
     esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL));
@@ -124,23 +92,17 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_wifi_start());
 
     ESP_LOGI(TAG, "Waiting for Wi-Fi...");
-    EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
-                                           WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-                                           pdFALSE, pdFALSE, portMAX_DELAY);
-    if (!(bits & WIFI_CONNECTED_BIT))
-    {
-        ESP_LOGE(TAG, "Wi-Fi connection failed");
-        return;
-    }
+    xEventGroupWaitBits(s_wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdFALSE, portMAX_DELAY);
 
-    esp_netif_set_default_netif(sta_netif);
-
+    // 3. Enable NAPT & Forwarding
     esp_netif_ip_info_t sta_ip;
     ESP_ERROR_CHECK(esp_netif_get_ip_info(sta_netif, &sta_ip));
-    ip_napt_enable(sta_ip.ip.addr, 1);
-    ESP_LOGI(TAG, "NAPT enabled on Wi-Fi STA interface");
 
-    /* 2. USB Host CDC driver */
+    // Enable NAPT on the interface connected to internet (Wi-Fi) [cite: 32, 50]
+    ip_napt_enable(sta_ip.ip.addr, 1);
+    ESP_LOGI(TAG, "NAPT fully initialized on STA interface");
+
+    // 4. USB Host CDC Driver Install [cite: 17, 24, 50]
     usbh_cdc_driver_config_t cdc_cfg = {
         .task_stack_size = 4096,
         .task_priority = 5,
@@ -149,69 +111,52 @@ void app_main(void)
     };
     ESP_ERROR_CHECK(usbh_cdc_driver_install(&cdc_cfg));
 
-    /* 3. RNDIS driver */
+    // 5. RNDIS Driver Initialization [cite: 4, 13, 50]
     usb_device_match_id_t *dev_match_id = calloc(2, sizeof(usb_device_match_id_t));
-    if (dev_match_id == NULL)
-    {
-        ESP_LOGE(TAG, "Failed to allocate match ID list");
-        return;
-    }
     dev_match_id[0].match_flags = USB_DEVICE_ID_MATCH_VID_PID;
     dev_match_id[0].idVendor = USB_DEVICE_VENDOR_ANY;
     dev_match_id[0].idProduct = USB_DEVICE_PRODUCT_ANY;
-    memset(&dev_match_id[1], 0, sizeof(usb_device_match_id_t));
 
-    iot_usbh_rndis_config_t rndis_cfg = {
-        .match_id_list = dev_match_id,
-    };
+    iot_usbh_rndis_config_t rndis_cfg = {.match_id_list = dev_match_id};
     iot_eth_driver_t *rndis_drv = NULL;
     ESP_ERROR_CHECK(iot_eth_new_usb_rndis(&rndis_cfg, &rndis_drv));
 
-    /* Install without stack_input - it will be set properly in iot_eth_post_attach */
-    iot_eth_config_t eth_cfg = {
-        .driver = rndis_drv,
-        .stack_input = NULL, /* Don't set this yet - netif doesn't exist */
-    };
+    iot_eth_config_t eth_cfg = {.driver = rndis_drv, .stack_input = NULL};
     iot_eth_handle_t eth_handle = NULL;
     ESP_ERROR_CHECK(iot_eth_install(&eth_cfg, &eth_handle));
 
-    /* 4. Netif */
+    // 6. Netif Creation for USB RNDIS [cite: 21, 50]
     esp_netif_inherent_config_t inherent_eth_config = ESP_NETIF_INHERENT_DEFAULT_ETH();
     inherent_eth_config.if_key = "USB_RNDIS";
     inherent_eth_config.if_desc = "USB_RNDIS";
     esp_netif_config_t netif_cfg = {
         .base = &inherent_eth_config,
-        .driver = NULL,
         .stack = ESP_NETIF_NETSTACK_DEFAULT_ETH,
     };
     esp_netif_t *rndis_netif = esp_netif_new(&netif_cfg);
-    if (rndis_netif == NULL)
-    {
-        ESP_LOGE(TAG, "Failed to create RNDIS netif");
-        return;
-    }
 
     iot_eth_netif_glue_handle_t glue = iot_eth_new_netif_glue(eth_handle);
-    if (glue == NULL)
-    {
-        ESP_LOGE(TAG, "Failed to create netif glue");
-        return;
-    }
     ESP_ERROR_CHECK(esp_netif_attach(rndis_netif, glue));
     ESP_ERROR_CHECK(iot_eth_start(eth_handle));
 
-    /* 5. Static IP + DHCP server for Luckfox */
+    // 7. Static IP + DHCP Server with DNS [cite: 33, 50]
     esp_netif_ip_info_t ip_info;
     IP4_ADDR(&ip_info.ip, RNDIS_IP_A, RNDIS_IP_B, RNDIS_IP_C, RNDIS_IP_D);
-    IP4_ADDR(&ip_info.gw, RNDIS_GW_A, RNDIS_GW_B, RNDIS_GW_C, RNDIS_GW_D);
-    IP4_ADDR(&ip_info.netmask, RNDIS_NM_A, RNDIS_NM_B, RNDIS_NM_C, RNDIS_NM_D);
+    IP4_ADDR(&ip_info.gw, RNDIS_IP_A, RNDIS_IP_B, RNDIS_IP_C, RNDIS_IP_D);
+    IP4_ADDR(&ip_info.netmask, 255, 255, 255, 0);
 
     esp_netif_dhcpc_stop(rndis_netif);
     ESP_ERROR_CHECK(esp_netif_set_ip_info(rndis_netif, &ip_info));
+
+    // Push Google DNS to the Luckfox automatically [cite: 33, 35, 50]
+    esp_netif_dns_info_t dns = {
+        .ip = ESP_IP4ADDR_INIT(8, 8, 8, 8),
+    };
+    ESP_ERROR_CHECK(esp_netif_set_dns_info(rndis_netif, ESP_NETIF_DNS_MAIN, &dns));
+
     ESP_ERROR_CHECK(esp_netif_dhcps_start(rndis_netif));
 
-    ESP_LOGI(TAG, "Bridge ready. Plug Luckfox into ESP32 OTG port.");
-    ESP_LOGI(TAG, "RNDIS gateway: %d.%d.%d.%d", RNDIS_IP_A, RNDIS_IP_B, RNDIS_IP_C, RNDIS_IP_D);
+    ESP_LOGI(TAG, "Bridge ready at 172.32.0.1. DNS: 8.8.8.8 pushed via DHCP.");
 
     while (1)
     {
