@@ -12,6 +12,7 @@ dependencies:
 direct_dependencies:
 - espressif/usb
 - idf
-manifest_hash: 26aaa53f3161bfab6bd6e32964d04b5024af03eb7b495eefa451898f03ab1680
+- usb
+manifest_hash: 59e9322e62798f09da03cf91b71a7c48688121ee0c5f1ed283de7c92357d6681
 target: esp32s3
 version: 3.0.0
