@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -15,6 +16,56 @@ static usb_host_client_handle_t client_hdl;
 #define VBUS_GPIO GPIO_NUM_10
 // ------------------------------------------------
 
+// Xbox 360 Controller HID Report Format (20 bytes)
+typedef struct
+{
+    uint8_t report_id;    // 0x00
+    uint8_t buttons_low;  // Buttons: A, B, X, Y, LB, RB, Back, Start
+    uint8_t buttons_high; // Buttons: LT/RT pressed, LS, RS, Xbox, pad
+    uint8_t lt;           // Left Trigger (0-255)
+    uint8_t rt;           // Right Trigger (0-255)
+    int16_t lx;           // Left Stick X (-32768 to 32767)
+    int16_t ly;           // Left Stick Y (-32768 to 32767)
+    int16_t rx;           // Right Stick X (-32768 to 32767)
+    int16_t ry;           // Right Stick Y (-32768 to 32767)
+    uint8_t reserved[2];  // Reserved bytes
+} xbox360_hid_report_t;
+
+// Xbox 360 Button masks
+#define XBOX_BTN_A (1 << 0)
+#define XBOX_BTN_B (1 << 1)
+#define XBOX_BTN_X (1 << 2)
+#define XBOX_BTN_Y (1 << 3)
+#define XBOX_BTN_LB (1 << 4)
+#define XBOX_BTN_RB (1 << 5)
+#define XBOX_BTN_BACK (1 << 6)
+#define XBOX_BTN_START (1 << 7)
+
+// Xbox 360 Button masks (high byte)
+#define XBOX_BTN_LS (1 << 1)
+#define XBOX_BTN_RS (1 << 2)
+#define XBOX_BTN_XBOX (1 << 4)
+
+// Xbox 360 DPAD masks (high byte)
+#define XBOX_DPAD_UP (1 << 0)
+#define XBOX_DPAD_DOWN (1 << 6)
+#define XBOX_DPAD_LEFT (1 << 7)
+#define XBOX_DPAD_RIGHT (1 << 5)
+
+// Device context
+typedef struct
+{
+    usb_device_handle_t dev_hdl;
+    uint8_t dev_addr;
+    usb_transfer_t *in_transfer;
+    uint8_t hid_buffer[20];
+    xbox360_hid_report_t prev_report;
+} xbox360_context_t;
+
+static xbox360_context_t xbox_ctx = {0};
+static bool xbox_connected = false;
+static SemaphoreHandle_t xbox_ready_sem = NULL;
+
 void usb_lib_task(void *arg)
 {
     while (1)
@@ -29,6 +80,141 @@ void usb_lib_task(void *arg)
         {
             ESP_LOGI(TAG, "All devices freed");
         }
+    }
+}
+
+// HID Transfer Callback
+static void hid_transfer_cb(usb_transfer_t *transfer)
+{
+    if (transfer->status == USB_TRANSFER_STATUS_COMPLETED)
+    {
+        // Parse the HID report
+        xbox360_hid_report_t *report = (xbox360_hid_report_t *)transfer->data_buffer;
+
+        // Convert byte order for analog sticks (little-endian)
+        report->lx = (int16_t)((transfer->data_buffer[5] << 8) | transfer->data_buffer[4]);
+        report->ly = (int16_t)((transfer->data_buffer[7] << 8) | transfer->data_buffer[6]);
+        report->rx = (int16_t)((transfer->data_buffer[9] << 8) | transfer->data_buffer[8]);
+        report->ry = (int16_t)((transfer->data_buffer[11] << 8) | transfer->data_buffer[10]);
+
+        // Print button changes
+        if (report->buttons_low != xbox_ctx.prev_report.buttons_low)
+        {
+            if ((report->buttons_low & XBOX_BTN_A) && !(xbox_ctx.prev_report.buttons_low & XBOX_BTN_A))
+                ESP_LOGI(TAG, "KEY  A              DOWN");
+            else if (!(report->buttons_low & XBOX_BTN_A) && (xbox_ctx.prev_report.buttons_low & XBOX_BTN_A))
+                ESP_LOGI(TAG, "KEY  A              UP");
+
+            if ((report->buttons_low & XBOX_BTN_B) && !(xbox_ctx.prev_report.buttons_low & XBOX_BTN_B))
+                ESP_LOGI(TAG, "KEY  B              DOWN");
+            else if (!(report->buttons_low & XBOX_BTN_B) && (xbox_ctx.prev_report.buttons_low & XBOX_BTN_B))
+                ESP_LOGI(TAG, "KEY  B              UP");
+
+            if ((report->buttons_low & XBOX_BTN_X) && !(xbox_ctx.prev_report.buttons_low & XBOX_BTN_X))
+                ESP_LOGI(TAG, "KEY  X              DOWN");
+            else if (!(report->buttons_low & XBOX_BTN_X) && (xbox_ctx.prev_report.buttons_low & XBOX_BTN_X))
+                ESP_LOGI(TAG, "KEY  X              UP");
+
+            if ((report->buttons_low & XBOX_BTN_Y) && !(xbox_ctx.prev_report.buttons_low & XBOX_BTN_Y))
+                ESP_LOGI(TAG, "KEY  Y              DOWN");
+            else if (!(report->buttons_low & XBOX_BTN_Y) && (xbox_ctx.prev_report.buttons_low & XBOX_BTN_Y))
+                ESP_LOGI(TAG, "KEY  Y              UP");
+
+            if ((report->buttons_low & XBOX_BTN_LB) && !(xbox_ctx.prev_report.buttons_low & XBOX_BTN_LB))
+                ESP_LOGI(TAG, "KEY  LB             DOWN");
+            else if (!(report->buttons_low & XBOX_BTN_LB) && (xbox_ctx.prev_report.buttons_low & XBOX_BTN_LB))
+                ESP_LOGI(TAG, "KEY  LB             UP");
+
+            if ((report->buttons_low & XBOX_BTN_RB) && !(xbox_ctx.prev_report.buttons_low & XBOX_BTN_RB))
+                ESP_LOGI(TAG, "KEY  RB             DOWN");
+            else if (!(report->buttons_low & XBOX_BTN_RB) && (xbox_ctx.prev_report.buttons_low & XBOX_BTN_RB))
+                ESP_LOGI(TAG, "KEY  RB             UP");
+
+            if ((report->buttons_low & XBOX_BTN_BACK) && !(xbox_ctx.prev_report.buttons_low & XBOX_BTN_BACK))
+                ESP_LOGI(TAG, "KEY  BACK           DOWN");
+            else if (!(report->buttons_low & XBOX_BTN_BACK) && (xbox_ctx.prev_report.buttons_low & XBOX_BTN_BACK))
+                ESP_LOGI(TAG, "KEY  BACK           UP");
+
+            if ((report->buttons_low & XBOX_BTN_START) && !(xbox_ctx.prev_report.buttons_low & XBOX_BTN_START))
+                ESP_LOGI(TAG, "KEY  START          DOWN");
+            else if (!(report->buttons_low & XBOX_BTN_START) && (xbox_ctx.prev_report.buttons_low & XBOX_BTN_START))
+                ESP_LOGI(TAG, "KEY  START          UP");
+        }
+
+        // Check DPAD (high byte)
+        if ((report->buttons_high & XBOX_DPAD_UP) && !(xbox_ctx.prev_report.buttons_high & XBOX_DPAD_UP))
+            ESP_LOGI(TAG, "KEY  DPAD_UP        DOWN");
+        else if (!(report->buttons_high & XBOX_DPAD_UP) && (xbox_ctx.prev_report.buttons_high & XBOX_DPAD_UP))
+            ESP_LOGI(TAG, "KEY  DPAD_UP        UP");
+
+        if ((report->buttons_high & XBOX_DPAD_DOWN) && !(xbox_ctx.prev_report.buttons_high & XBOX_DPAD_DOWN))
+            ESP_LOGI(TAG, "KEY  DPAD_DOWN      DOWN");
+        else if (!(report->buttons_high & XBOX_DPAD_DOWN) && (xbox_ctx.prev_report.buttons_high & XBOX_DPAD_DOWN))
+            ESP_LOGI(TAG, "KEY  DPAD_DOWN      UP");
+
+        if ((report->buttons_high & XBOX_DPAD_LEFT) && !(xbox_ctx.prev_report.buttons_high & XBOX_DPAD_LEFT))
+            ESP_LOGI(TAG, "KEY  DPAD_LEFT      DOWN");
+        else if (!(report->buttons_high & XBOX_DPAD_LEFT) && (xbox_ctx.prev_report.buttons_high & XBOX_DPAD_LEFT))
+            ESP_LOGI(TAG, "KEY  DPAD_LEFT      UP");
+
+        if ((report->buttons_high & XBOX_DPAD_RIGHT) && !(xbox_ctx.prev_report.buttons_high & XBOX_DPAD_RIGHT))
+            ESP_LOGI(TAG, "KEY  DPAD_RIGHT     DOWN");
+        else if (!(report->buttons_high & XBOX_DPAD_RIGHT) && (xbox_ctx.prev_report.buttons_high & XBOX_DPAD_RIGHT))
+            ESP_LOGI(TAG, "KEY  DPAD_RIGHT     UP");
+
+        if ((report->buttons_high & XBOX_BTN_LS) && !(xbox_ctx.prev_report.buttons_high & XBOX_BTN_LS))
+            ESP_LOGI(TAG, "KEY  LS             DOWN");
+        else if (!(report->buttons_high & XBOX_BTN_LS) && (xbox_ctx.prev_report.buttons_high & XBOX_BTN_LS))
+            ESP_LOGI(TAG, "KEY  LS             UP");
+
+        if ((report->buttons_high & XBOX_BTN_RS) && !(xbox_ctx.prev_report.buttons_high & XBOX_BTN_RS))
+            ESP_LOGI(TAG, "KEY  RS             DOWN");
+        else if (!(report->buttons_high & XBOX_BTN_RS) && (xbox_ctx.prev_report.buttons_high & XBOX_BTN_RS))
+            ESP_LOGI(TAG, "KEY  RS             UP");
+
+        if ((report->buttons_high & XBOX_BTN_XBOX) && !(xbox_ctx.prev_report.buttons_high & XBOX_BTN_XBOX))
+            ESP_LOGI(TAG, "KEY  XBOX           DOWN");
+        else if (!(report->buttons_high & XBOX_BTN_XBOX) && (xbox_ctx.prev_report.buttons_high & XBOX_BTN_XBOX))
+            ESP_LOGI(TAG, "KEY  XBOX           UP");
+
+        // Print analog sticks (with dead zone)
+        const int16_t DEAD_ZONE = 3000;
+
+        if (abs(report->lx) > DEAD_ZONE || abs(report->ly) > DEAD_ZONE)
+        {
+            if (abs(report->lx) > DEAD_ZONE)
+                ESP_LOGI(TAG, "ABS  LX             raw=%6d norm=%+.3f", report->lx, (float)report->lx / 32767.0f);
+            if (abs(report->ly) > DEAD_ZONE)
+                ESP_LOGI(TAG, "ABS  LY             raw=%6d norm=%+.3f", report->ly, (float)report->ly / 32767.0f);
+        }
+
+        if (abs(report->rx) > DEAD_ZONE || abs(report->ry) > DEAD_ZONE)
+        {
+            if (abs(report->rx) > DEAD_ZONE)
+                ESP_LOGI(TAG, "ABS  RX             raw=%6d norm=%+.3f", report->rx, (float)report->rx / 32767.0f);
+            if (abs(report->ry) > DEAD_ZONE)
+                ESP_LOGI(TAG, "ABS  RY             raw=%6d norm=%+.3f", report->ry, (float)report->ry / 32767.0f);
+        }
+
+        // Print triggers (always, no dead zone needed)
+        if (report->lt != xbox_ctx.prev_report.lt)
+            ESP_LOGI(TAG, "ABS  LT             raw=%6d norm=%+.3f", report->lt, (float)report->lt / 255.0f);
+
+        if (report->rt != xbox_ctx.prev_report.rt)
+            ESP_LOGI(TAG, "ABS  RT             raw=%6d norm=%+.3f", report->rt, (float)report->rt / 255.0f);
+
+        // Update previous report
+        memcpy(&xbox_ctx.prev_report, report, sizeof(xbox360_hid_report_t));
+    }
+    else if (transfer->status != USB_TRANSFER_STATUS_NO_DEVICE)
+    {
+        ESP_LOGW(TAG, "HID transfer error: %d", transfer->status);
+    }
+
+    // Resubmit transfer if device still connected
+    if (xbox_connected && xbox_ctx.dev_hdl)
+    {
+        usb_host_transfer_submit(xbox_ctx.in_transfer);
     }
 }
 
@@ -84,15 +270,169 @@ void client_event_cb(const usb_host_client_event_msg_t *event_msg, void *arg)
         ESP_LOGI(TAG, "Class: 0x%02X, Subclass: 0x%02X, Protocol: 0x%02X",
                  dev_desc->bDeviceClass, dev_desc->bDeviceSubClass, dev_desc->bDeviceProtocol);
 
-        // For Xbox 360 (045e:028e) we can also print the serial number if needed
+        // Check if Xbox 360 Controller
         if (dev_desc->idVendor == 0x045E && dev_desc->idProduct == 0x028E)
         {
             ESP_LOGW(TAG, "Xbox 360 Controller detected!");
+
+            // Get configuration descriptor
+            const usb_config_desc_t *config_desc;
+            err = usb_host_get_active_config_descriptor(dev_hdl, &config_desc);
+            if (err != ESP_OK)
+            {
+                ESP_LOGE(TAG, "Failed to get config descriptor: %s", esp_err_to_name(err));
+                usb_host_device_close(client_hdl, dev_hdl);
+                return;
+            }
+
+            ESP_LOGI(TAG, "Config: bNumInterfaces=%d, wTotalLength=%d",
+                     config_desc->bNumInterfaces, config_desc->wTotalLength);
+
+            // Find HID IN endpoint (0x81 - Interface 0, IN endpoint)
+            uint8_t ep_in_addr = 0;
+            uint16_t ep_in_mps = 0;
+            int offset = 0;
+
+            // Parse Interface 0
+            const usb_intf_desc_t *intf = usb_parse_interface_descriptor(
+                config_desc, 0, 0, &offset);
+
+            if (intf == NULL)
+            {
+                ESP_LOGE(TAG, "Failed to find interface 0");
+                usb_host_device_close(client_hdl, dev_hdl);
+                return;
+            }
+
+            ESP_LOGI(TAG, "Interface 0: Class=0x%02X, Subclass=0x%02X, NumEP=%d",
+                     intf->bInterfaceClass, intf->bInterfaceSubClass, intf->bNumEndpoints);
+
+            // Look for HID interface (bInterfaceClass = 0xFF for Xbox 360)
+            if (intf->bInterfaceClass == 0xFF)
+            {
+                for (int j = 0; j < intf->bNumEndpoints; j++)
+                {
+                    const usb_ep_desc_t *ep = usb_parse_endpoint_descriptor_by_index(
+                        intf, j, config_desc->wTotalLength, &offset);
+
+                    if (ep != NULL)
+                    {
+                        ESP_LOGI(TAG, "  EP %d: addr=0x%02X, attr=0x%02X, wMaxPacketSize=%d",
+                                 j, ep->bEndpointAddress, ep->bmAttributes, USB_EP_DESC_GET_MPS(ep));
+
+                        // Check if IN endpoint (bEndpointAddress bit 7 = 1 for IN)
+                        if (ep->bEndpointAddress & 0x80)
+                        {
+                            ep_in_addr = ep->bEndpointAddress;
+                            ep_in_mps = USB_EP_DESC_GET_MPS(ep);
+                            ESP_LOGI(TAG, "Selected IN endpoint: 0x%02X, MPS: %d", ep_in_addr, ep_in_mps);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (!ep_in_addr)
+            {
+                ESP_LOGE(TAG, "Failed to find HID IN endpoint");
+                usb_host_device_close(client_hdl, dev_hdl);
+                return;
+            }
+
+            // Claim the interface to access its endpoints
+            ESP_LOGI(TAG, "Claiming interface 0...");
+            err = usb_host_interface_claim(client_hdl, dev_hdl, 0, 0);
+            if (err != ESP_OK)
+            {
+                ESP_LOGE(TAG, "Failed to claim interface: %s", esp_err_to_name(err));
+                usb_host_device_close(client_hdl, dev_hdl);
+                return;
+            }
+
+            ESP_LOGI(TAG, "Interface claimed successfully");
+
+            // Allocate USB transfer (allocate MPS size to match endpoint)
+            usb_transfer_t *transfer = NULL;
+            err = usb_host_transfer_alloc(ep_in_mps, 0, &transfer);
+            if (err != ESP_OK || transfer == NULL)
+            {
+                ESP_LOGE(TAG, "Failed to allocate transfer: %s", esp_err_to_name(err));
+                usb_host_interface_release(client_hdl, dev_hdl, 0);
+                usb_host_device_close(client_hdl, dev_hdl);
+                return;
+            }
+
+            ESP_LOGI(TAG, "Transfer allocated: data_buffer=%p, buffer_size=%d",
+                     transfer->data_buffer, transfer->data_buffer_size);
+
+            // Setup transfer
+            transfer->device_handle = dev_hdl;
+            transfer->bEndpointAddress = ep_in_addr;
+            transfer->callback = hid_transfer_cb;
+            transfer->context = NULL;
+            transfer->timeout_ms = 1000;     // 1 second timeout
+            transfer->num_bytes = ep_in_mps; // Read full MPS size
+
+            // Store device context
+            xbox_ctx.dev_hdl = dev_hdl;
+            xbox_ctx.dev_addr = event_msg->new_dev.address;
+            xbox_ctx.in_transfer = transfer;
+            xbox_connected = true;
+
+            // Small delay to ensure device is ready
+            vTaskDelay(pdMS_TO_TICKS(100));
+
+            // Submit first transfer
+            ESP_LOGI(TAG, "Submitting transfer for endpoint 0x%02X...", ep_in_addr);
+            err = usb_host_transfer_submit(transfer);
+            if (err != ESP_OK)
+            {
+                ESP_LOGE(TAG, "Failed to submit transfer: %s", esp_err_to_name(err));
+                usb_host_transfer_free(transfer);
+                usb_host_interface_release(client_hdl, dev_hdl, 0);
+                usb_host_device_close(client_hdl, dev_hdl);
+                xbox_connected = false;
+                return;
+            }
+
+            ESP_LOGI(TAG, "Xbox 360 HID reading started successfully");
+            xSemaphoreGive(xbox_ready_sem);
+        }
+        else
+        {
+            // Not Xbox 360, close device
+            usb_host_device_close(client_hdl, dev_hdl);
         }
 
-        // Close device after inspection
-        usb_host_device_close(client_hdl, dev_hdl);
         ESP_LOGW(TAG, "-----------------------");
+    }
+    else if (event_msg->event == USB_HOST_CLIENT_EVENT_DEV_GONE)
+    {
+        ESP_LOGW(TAG, "Device disconnected");
+
+        if (xbox_connected)
+        {
+            xbox_connected = false;
+
+            if (xbox_ctx.in_transfer)
+            {
+                usb_host_transfer_free(xbox_ctx.in_transfer);
+                xbox_ctx.in_transfer = NULL;
+            }
+
+            // Release the interface before closing device
+            if (xbox_ctx.dev_hdl)
+            {
+                usb_host_interface_release(client_hdl, xbox_ctx.dev_hdl, 0);
+                usb_host_device_close(client_hdl, xbox_ctx.dev_hdl);
+                xbox_ctx.dev_hdl = NULL;
+            }
+
+            memset(&xbox_ctx, 0, sizeof(xbox360_context_t));
+            memset(&xbox_ctx.prev_report, 0, sizeof(xbox360_hid_report_t));
+
+            ESP_LOGI(TAG, "Xbox 360 controller cleaned up");
+        }
     }
 }
 
@@ -113,6 +453,14 @@ static void enable_vbus(void)
 
 void app_main(void)
 {
+    // Initialize semaphore for Xbox ready event
+    xbox_ready_sem = xSemaphoreCreateBinary();
+    if (xbox_ready_sem == NULL)
+    {
+        ESP_LOGE(TAG, "Failed to create semaphore");
+        return;
+    }
+
     // 1. Enable 5V VBUS (critical for most USB OTG ports)
     enable_vbus();
 
