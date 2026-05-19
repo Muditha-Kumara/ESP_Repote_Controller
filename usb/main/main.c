@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -17,40 +18,40 @@ static usb_host_client_handle_t client_hdl;
 // ------------------------------------------------
 
 // Xbox 360 Controller HID Report Format (20 bytes)
+// Byte 0: report id, Byte 1: packet size (0x14), then buttons/axes payload
 typedef struct
 {
-    uint8_t report_id;    // 0x00
-    uint8_t buttons_low;  // Buttons: A, B, X, Y, LB, RB, Back, Start
-    uint8_t buttons_high; // Buttons: LT/RT pressed, LS, RS, Xbox, pad
-    uint8_t lt;           // Left Trigger (0-255)
-    uint8_t rt;           // Right Trigger (0-255)
-    int16_t lx;           // Left Stick X (-32768 to 32767)
-    int16_t ly;           // Left Stick Y (-32768 to 32767)
-    int16_t rx;           // Right Stick X (-32768 to 32767)
-    int16_t ry;           // Right Stick Y (-32768 to 32767)
-    uint8_t reserved[2];  // Reserved bytes
+    uint8_t report_id;
+    uint8_t packet_size;
+    uint8_t buttons_low;  // DPAD + START/BACK + LS/RS
+    uint8_t buttons_high; // LB/RB/XBOX + A/B/X/Y
+    uint8_t lt;
+    uint8_t rt;
+    int16_t lx;
+    int16_t ly;
+    int16_t rx;
+    int16_t ry;
+    uint8_t reserved[6];
 } xbox360_hid_report_t;
 
-// Xbox 360 Button masks
-#define XBOX_BTN_A (1 << 0)
-#define XBOX_BTN_B (1 << 1)
-#define XBOX_BTN_X (1 << 2)
-#define XBOX_BTN_Y (1 << 3)
-#define XBOX_BTN_LB (1 << 4)
-#define XBOX_BTN_RB (1 << 5)
-#define XBOX_BTN_BACK (1 << 6)
-#define XBOX_BTN_START (1 << 7)
-
-// Xbox 360 Button masks (high byte)
-#define XBOX_BTN_LS (1 << 1)
-#define XBOX_BTN_RS (1 << 2)
-#define XBOX_BTN_XBOX (1 << 4)
-
-// Xbox 360 DPAD masks (high byte)
+// Xbox 360 button masks in buttons_low (byte 2)
 #define XBOX_DPAD_UP (1 << 0)
-#define XBOX_DPAD_DOWN (1 << 6)
-#define XBOX_DPAD_LEFT (1 << 7)
-#define XBOX_DPAD_RIGHT (1 << 5)
+#define XBOX_DPAD_DOWN (1 << 1)
+#define XBOX_DPAD_LEFT (1 << 2)
+#define XBOX_DPAD_RIGHT (1 << 3)
+#define XBOX_BTN_START (1 << 4)
+#define XBOX_BTN_BACK (1 << 5)
+#define XBOX_BTN_LS (1 << 6)
+#define XBOX_BTN_RS (1 << 7)
+
+// Xbox 360 button masks in buttons_high (byte 3)
+#define XBOX_BTN_LB (1 << 0)
+#define XBOX_BTN_RB (1 << 1)
+#define XBOX_BTN_XBOX (1 << 2)
+#define XBOX_BTN_A (1 << 4)
+#define XBOX_BTN_B (1 << 5)
+#define XBOX_BTN_X (1 << 6)
+#define XBOX_BTN_Y (1 << 7)
 
 // Device context
 typedef struct
@@ -65,6 +66,18 @@ typedef struct
 static xbox360_context_t xbox_ctx = {0};
 static bool xbox_connected = false;
 static SemaphoreHandle_t xbox_ready_sem = NULL;
+
+// Teleplot digital metrics output function
+static inline void teleplot_send_i32(const char *series, int32_t value)
+{
+    printf(">%s:%ld|g\n", series, (long)value);
+}
+
+// Teleplot analog metrics output function
+static inline void teleplot_send_f32(const char *series, float value)
+{
+    printf(">%s:%.5f|g\n", series, (double)value);
+}
 
 void usb_lib_task(void *arg)
 {
@@ -92,116 +105,65 @@ static void hid_transfer_cb(usb_transfer_t *transfer)
         xbox360_hid_report_t *report = (xbox360_hid_report_t *)transfer->data_buffer;
 
         // Convert byte order for analog sticks (little-endian)
-        report->lx = (int16_t)((transfer->data_buffer[5] << 8) | transfer->data_buffer[4]);
-        report->ly = (int16_t)((transfer->data_buffer[7] << 8) | transfer->data_buffer[6]);
-        report->rx = (int16_t)((transfer->data_buffer[9] << 8) | transfer->data_buffer[8]);
-        report->ry = (int16_t)((transfer->data_buffer[11] << 8) | transfer->data_buffer[10]);
+        report->lx = (int16_t)((transfer->data_buffer[7] << 8) | transfer->data_buffer[6]);
+        report->ly = (int16_t)((transfer->data_buffer[9] << 8) | transfer->data_buffer[8]);
+        report->rx = (int16_t)((transfer->data_buffer[11] << 8) | transfer->data_buffer[10]);
+        report->ry = (int16_t)((transfer->data_buffer[13] << 8) | transfer->data_buffer[12]);
 
-        // Print button changes
-        if (report->buttons_low != xbox_ctx.prev_report.buttons_low)
-        {
-            if ((report->buttons_low & XBOX_BTN_A) && !(xbox_ctx.prev_report.buttons_low & XBOX_BTN_A))
-                ESP_LOGI(TAG, "KEY  A              DOWN");
-            else if (!(report->buttons_low & XBOX_BTN_A) && (xbox_ctx.prev_report.buttons_low & XBOX_BTN_A))
-                ESP_LOGI(TAG, "KEY  A              UP");
+        // Emit button states as Teleplot digital channels (0/1).
+#define EMIT_BUTTON_FIELD(field, mask, channel)                                   \
+    do                                                                            \
+    {                                                                             \
+        if (((report->field ^ xbox_ctx.prev_report.field) & (mask)) != 0)         \
+        {                                                                         \
+            teleplot_send_i32("xbox/" channel, (report->field & (mask)) ? 1 : 0); \
+        }                                                                         \
+    } while (0)
 
-            if ((report->buttons_low & XBOX_BTN_B) && !(xbox_ctx.prev_report.buttons_low & XBOX_BTN_B))
-                ESP_LOGI(TAG, "KEY  B              DOWN");
-            else if (!(report->buttons_low & XBOX_BTN_B) && (xbox_ctx.prev_report.buttons_low & XBOX_BTN_B))
-                ESP_LOGI(TAG, "KEY  B              UP");
+        EMIT_BUTTON_FIELD(buttons_low, XBOX_BTN_BACK, "back");
+        EMIT_BUTTON_FIELD(buttons_low, XBOX_BTN_START, "start");
+        EMIT_BUTTON_FIELD(buttons_low, XBOX_DPAD_UP, "dpad_up");
+        EMIT_BUTTON_FIELD(buttons_low, XBOX_DPAD_DOWN, "dpad_down");
+        EMIT_BUTTON_FIELD(buttons_low, XBOX_DPAD_LEFT, "dpad_left");
+        EMIT_BUTTON_FIELD(buttons_low, XBOX_DPAD_RIGHT, "dpad_right");
+        EMIT_BUTTON_FIELD(buttons_low, XBOX_BTN_LS, "ls");
+        EMIT_BUTTON_FIELD(buttons_low, XBOX_BTN_RS, "rs");
 
-            if ((report->buttons_low & XBOX_BTN_X) && !(xbox_ctx.prev_report.buttons_low & XBOX_BTN_X))
-                ESP_LOGI(TAG, "KEY  X              DOWN");
-            else if (!(report->buttons_low & XBOX_BTN_X) && (xbox_ctx.prev_report.buttons_low & XBOX_BTN_X))
-                ESP_LOGI(TAG, "KEY  X              UP");
+        EMIT_BUTTON_FIELD(buttons_high, XBOX_BTN_A, "a");
+        EMIT_BUTTON_FIELD(buttons_high, XBOX_BTN_B, "b");
+        EMIT_BUTTON_FIELD(buttons_high, XBOX_BTN_X, "x");
+        EMIT_BUTTON_FIELD(buttons_high, XBOX_BTN_Y, "y");
+        EMIT_BUTTON_FIELD(buttons_high, XBOX_BTN_LB, "lb");
+        EMIT_BUTTON_FIELD(buttons_high, XBOX_BTN_RB, "rb");
+        EMIT_BUTTON_FIELD(buttons_high, XBOX_BTN_XBOX, "xbox");
 
-            if ((report->buttons_low & XBOX_BTN_Y) && !(xbox_ctx.prev_report.buttons_low & XBOX_BTN_Y))
-                ESP_LOGI(TAG, "KEY  Y              DOWN");
-            else if (!(report->buttons_low & XBOX_BTN_Y) && (xbox_ctx.prev_report.buttons_low & XBOX_BTN_Y))
-                ESP_LOGI(TAG, "KEY  Y              UP");
+#undef EMIT_BUTTON_FIELD
 
-            if ((report->buttons_low & XBOX_BTN_LB) && !(xbox_ctx.prev_report.buttons_low & XBOX_BTN_LB))
-                ESP_LOGI(TAG, "KEY  LB             DOWN");
-            else if (!(report->buttons_low & XBOX_BTN_LB) && (xbox_ctx.prev_report.buttons_low & XBOX_BTN_LB))
-                ESP_LOGI(TAG, "KEY  LB             UP");
-
-            if ((report->buttons_low & XBOX_BTN_RB) && !(xbox_ctx.prev_report.buttons_low & XBOX_BTN_RB))
-                ESP_LOGI(TAG, "KEY  RB             DOWN");
-            else if (!(report->buttons_low & XBOX_BTN_RB) && (xbox_ctx.prev_report.buttons_low & XBOX_BTN_RB))
-                ESP_LOGI(TAG, "KEY  RB             UP");
-
-            if ((report->buttons_low & XBOX_BTN_BACK) && !(xbox_ctx.prev_report.buttons_low & XBOX_BTN_BACK))
-                ESP_LOGI(TAG, "KEY  BACK           DOWN");
-            else if (!(report->buttons_low & XBOX_BTN_BACK) && (xbox_ctx.prev_report.buttons_low & XBOX_BTN_BACK))
-                ESP_LOGI(TAG, "KEY  BACK           UP");
-
-            if ((report->buttons_low & XBOX_BTN_START) && !(xbox_ctx.prev_report.buttons_low & XBOX_BTN_START))
-                ESP_LOGI(TAG, "KEY  START          DOWN");
-            else if (!(report->buttons_low & XBOX_BTN_START) && (xbox_ctx.prev_report.buttons_low & XBOX_BTN_START))
-                ESP_LOGI(TAG, "KEY  START          UP");
-        }
-
-        // Check DPAD (high byte)
-        if ((report->buttons_high & XBOX_DPAD_UP) && !(xbox_ctx.prev_report.buttons_high & XBOX_DPAD_UP))
-            ESP_LOGI(TAG, "KEY  DPAD_UP        DOWN");
-        else if (!(report->buttons_high & XBOX_DPAD_UP) && (xbox_ctx.prev_report.buttons_high & XBOX_DPAD_UP))
-            ESP_LOGI(TAG, "KEY  DPAD_UP        UP");
-
-        if ((report->buttons_high & XBOX_DPAD_DOWN) && !(xbox_ctx.prev_report.buttons_high & XBOX_DPAD_DOWN))
-            ESP_LOGI(TAG, "KEY  DPAD_DOWN      DOWN");
-        else if (!(report->buttons_high & XBOX_DPAD_DOWN) && (xbox_ctx.prev_report.buttons_high & XBOX_DPAD_DOWN))
-            ESP_LOGI(TAG, "KEY  DPAD_DOWN      UP");
-
-        if ((report->buttons_high & XBOX_DPAD_LEFT) && !(xbox_ctx.prev_report.buttons_high & XBOX_DPAD_LEFT))
-            ESP_LOGI(TAG, "KEY  DPAD_LEFT      DOWN");
-        else if (!(report->buttons_high & XBOX_DPAD_LEFT) && (xbox_ctx.prev_report.buttons_high & XBOX_DPAD_LEFT))
-            ESP_LOGI(TAG, "KEY  DPAD_LEFT      UP");
-
-        if ((report->buttons_high & XBOX_DPAD_RIGHT) && !(xbox_ctx.prev_report.buttons_high & XBOX_DPAD_RIGHT))
-            ESP_LOGI(TAG, "KEY  DPAD_RIGHT     DOWN");
-        else if (!(report->buttons_high & XBOX_DPAD_RIGHT) && (xbox_ctx.prev_report.buttons_high & XBOX_DPAD_RIGHT))
-            ESP_LOGI(TAG, "KEY  DPAD_RIGHT     UP");
-
-        if ((report->buttons_high & XBOX_BTN_LS) && !(xbox_ctx.prev_report.buttons_high & XBOX_BTN_LS))
-            ESP_LOGI(TAG, "KEY  LS             DOWN");
-        else if (!(report->buttons_high & XBOX_BTN_LS) && (xbox_ctx.prev_report.buttons_high & XBOX_BTN_LS))
-            ESP_LOGI(TAG, "KEY  LS             UP");
-
-        if ((report->buttons_high & XBOX_BTN_RS) && !(xbox_ctx.prev_report.buttons_high & XBOX_BTN_RS))
-            ESP_LOGI(TAG, "KEY  RS             DOWN");
-        else if (!(report->buttons_high & XBOX_BTN_RS) && (xbox_ctx.prev_report.buttons_high & XBOX_BTN_RS))
-            ESP_LOGI(TAG, "KEY  RS             UP");
-
-        if ((report->buttons_high & XBOX_BTN_XBOX) && !(xbox_ctx.prev_report.buttons_high & XBOX_BTN_XBOX))
-            ESP_LOGI(TAG, "KEY  XBOX           DOWN");
-        else if (!(report->buttons_high & XBOX_BTN_XBOX) && (xbox_ctx.prev_report.buttons_high & XBOX_BTN_XBOX))
-            ESP_LOGI(TAG, "KEY  XBOX           UP");
-
-        // Print analog sticks (with dead zone)
+        // Emit analog channels as normalized Teleplot values.
         const int16_t DEAD_ZONE = 3000;
+        const int16_t lx_plot = (abs(report->lx) > DEAD_ZONE) ? report->lx : 0;
+        const int16_t ly_plot = (abs(report->ly) > DEAD_ZONE) ? report->ly : 0;
+        const int16_t rx_plot = (abs(report->rx) > DEAD_ZONE) ? report->rx : 0;
+        const int16_t ry_plot = (abs(report->ry) > DEAD_ZONE) ? report->ry : 0;
 
-        if (abs(report->lx) > DEAD_ZONE || abs(report->ly) > DEAD_ZONE)
-        {
-            if (abs(report->lx) > DEAD_ZONE)
-                ESP_LOGI(TAG, "ABS  LX             raw=%6d norm=%+.3f", report->lx, (float)report->lx / 32767.0f);
-            if (abs(report->ly) > DEAD_ZONE)
-                ESP_LOGI(TAG, "ABS  LY             raw=%6d norm=%+.3f", report->ly, (float)report->ly / 32767.0f);
-        }
+        const int16_t prev_lx_plot = (abs(xbox_ctx.prev_report.lx) > DEAD_ZONE) ? xbox_ctx.prev_report.lx : 0;
+        const int16_t prev_ly_plot = (abs(xbox_ctx.prev_report.ly) > DEAD_ZONE) ? xbox_ctx.prev_report.ly : 0;
+        const int16_t prev_rx_plot = (abs(xbox_ctx.prev_report.rx) > DEAD_ZONE) ? xbox_ctx.prev_report.rx : 0;
+        const int16_t prev_ry_plot = (abs(xbox_ctx.prev_report.ry) > DEAD_ZONE) ? xbox_ctx.prev_report.ry : 0;
 
-        if (abs(report->rx) > DEAD_ZONE || abs(report->ry) > DEAD_ZONE)
-        {
-            if (abs(report->rx) > DEAD_ZONE)
-                ESP_LOGI(TAG, "ABS  RX             raw=%6d norm=%+.3f", report->rx, (float)report->rx / 32767.0f);
-            if (abs(report->ry) > DEAD_ZONE)
-                ESP_LOGI(TAG, "ABS  RY             raw=%6d norm=%+.3f", report->ry, (float)report->ry / 32767.0f);
-        }
+        if (lx_plot != prev_lx_plot)
+            teleplot_send_f32("xbox/lx", (float)lx_plot / 32767.0f);
+        if (ly_plot != prev_ly_plot)
+            teleplot_send_f32("xbox/ly", (float)ly_plot / 32767.0f);
+        if (rx_plot != prev_rx_plot)
+            teleplot_send_f32("xbox/rx", (float)rx_plot / 32767.0f);
+        if (ry_plot != prev_ry_plot)
+            teleplot_send_f32("xbox/ry", (float)ry_plot / 32767.0f);
 
-        // Print triggers (always, no dead zone needed)
         if (report->lt != xbox_ctx.prev_report.lt)
-            ESP_LOGI(TAG, "ABS  LT             raw=%6d norm=%+.3f", report->lt, (float)report->lt / 255.0f);
-
+            teleplot_send_f32("xbox/lt", (float)report->lt / 255.0f);
         if (report->rt != xbox_ctx.prev_report.rt)
-            ESP_LOGI(TAG, "ABS  RT             raw=%6d norm=%+.3f", report->rt, (float)report->rt / 255.0f);
+            teleplot_send_f32("xbox/rt", (float)report->rt / 255.0f);
 
         // Update previous report
         memcpy(&xbox_ctx.prev_report, report, sizeof(xbox360_hid_report_t));
@@ -396,6 +358,7 @@ void client_event_cb(const usb_host_client_event_msg_t *event_msg, void *arg)
             }
 
             ESP_LOGI(TAG, "Xbox 360 HID reading started successfully");
+            teleplot_send_i32("xbox/connected", 1);
             xSemaphoreGive(xbox_ready_sem);
         }
         else
@@ -432,6 +395,7 @@ void client_event_cb(const usb_host_client_event_msg_t *event_msg, void *arg)
             memset(&xbox_ctx.prev_report, 0, sizeof(xbox360_hid_report_t));
 
             ESP_LOGI(TAG, "Xbox 360 controller cleaned up");
+            teleplot_send_i32("xbox/connected", 0);
         }
     }
 }
@@ -489,7 +453,7 @@ void app_main(void)
     xTaskCreatePinnedToCore(usb_client_task, "usb_client", 8192, NULL, 3, NULL, 0);
 
     // 5. Start monitor task
-    xTaskCreatePinnedToCore(usb_monitor_task, "usb_monitor", 4096, NULL, 2, NULL, 0);
+    // xTaskCreatePinnedToCore(usb_monitor_task, "usb_monitor", 4096, NULL, 2, NULL, 0);
 
     ESP_LOGW(TAG, "Ready – Plug your Xbox 360 controller into the USB OTG port now");
 
