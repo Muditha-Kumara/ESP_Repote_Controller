@@ -23,15 +23,15 @@ static void command_watchdog_task(void *pvParameters)
             tb6612fng_stop();
         }
 
-        vTaskDelay(pdMS_TO_TICKS(50));
+        vTaskDelay(pdMS_TO_TICKS(500));
     }
 }
 
 void app_main(void)
 {
     ESP_LOGI(TAG, "Receiver starting");
-    ESP_LOGI(TAG, "Thrust motor pins: PWM GPIO21, IN1 GPIO18, IN2 GPIO19");
-    ESP_LOGI(TAG, "Steering motor pins: PWM GPIO22, IN1 GPIO4, IN2 GPIO5");
+    ESP_LOGI(TAG, "Left motor pins: PWM GPIO21, IN1 GPIO18, IN2 GPIO19");
+    ESP_LOGI(TAG, "Right motor pins: PWM GPIO22, IN1 GPIO4, IN2 GPIO5");
     ESP_LOGI(TAG, "TB6612 STBY pin: GPIO23");
 
     esp_err_t ret = nvs_flash_init();
@@ -49,5 +49,5 @@ void app_main(void)
 
     xTaskCreatePinnedToCore(command_watchdog_task, "cmd_watchdog", 3072, NULL, 4, NULL, 1);
 
-    ESP_LOGI(TAG, "Receiver ready: waiting for transmitter packets");
+    ESP_LOGI(TAG, "Receiver ready: waiting for boat motor packets");
 }

@@ -9,8 +9,8 @@
 
 static const char *TAG = "TB6612FNG";
 
-// Receiver pin map constrained to the pins you provided.
-// PWM and standby use the least risky GPIOs from the set.
+// Receiver pin map constrained to the pins currently wired on this board.
+// motor1 drives the left motor, motor2 drives the right motor.
 #define THRUST_PWM_GPIO  GPIO_NUM_21
 #define THRUST_IN1_GPIO   GPIO_NUM_18
 #define THRUST_IN2_GPIO   GPIO_NUM_19
@@ -142,15 +142,18 @@ void tb6612fng_apply(const motor_control_t *command)
 
     gpio_set_level(TB6612_STBY_GPIO, 1);
 
-    int thrust_speed = signed_speed_from_command(command->motor1_speed, command->motor1_direction);
-    int steer_speed = signed_speed_from_command(command->motor2_speed, command->motor2_direction);
+    int left_motor_speed = signed_speed_from_command(command->motor1_speed, command->motor1_direction);
+    int right_motor_speed = signed_speed_from_command(command->motor2_speed, command->motor2_direction);
 
-    apply_motor(LEDC_CHANNEL_0, THRUST_IN1_GPIO, THRUST_IN2_GPIO, thrust_speed);
-    apply_motor(LEDC_CHANNEL_1, STEER_IN1_GPIO, STEER_IN2_GPIO, steer_speed);
+    ESP_LOGI(TAG, "Applied motor speeds: left=%d, right=%d", left_motor_speed, right_motor_speed);
+
+    apply_motor(LEDC_CHANNEL_0, THRUST_IN1_GPIO, THRUST_IN2_GPIO, left_motor_speed);
+    apply_motor(LEDC_CHANNEL_1, STEER_IN1_GPIO, STEER_IN2_GPIO, right_motor_speed);
 }
 
 void tb6612fng_stop(void)
 {
+    ESP_LOGI(TAG, "Applied motor speeds: left=0, right=0");
     set_pwm(LEDC_CHANNEL_0, 0);
     set_pwm(LEDC_CHANNEL_1, 0);
     set_direction(THRUST_IN1_GPIO, THRUST_IN2_GPIO, 0);

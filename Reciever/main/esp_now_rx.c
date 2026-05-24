@@ -30,7 +30,7 @@ static esp_err_t ensure_peer_exists(const uint8_t *peer_addr)
 
     esp_now_peer_info_t peer = {0};
     memcpy(peer.peer_addr, peer_addr, ESP_NOW_ETH_ALEN);
-    peer.channel = 1;
+    peer.channel = 11;
     peer.ifidx = WIFI_IF_STA;
     peer.encrypt = false;
     return esp_now_add_peer(&peer);
@@ -97,7 +97,7 @@ static void recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, i
     }
 
     /* Print parsed motor control values */
-    ESP_LOGI(TAG, "motor1: speed=%d dir=%d; motor2: speed=%d dir=%d; ts=%u",
+    ESP_LOGI(TAG, "left motor: speed=%d dir=%d; right motor: speed=%d dir=%d; ts=%u",
              latest_command.motor1_speed, latest_command.motor1_direction,
              latest_command.motor2_speed, latest_command.motor2_direction,
              latest_command.timestamp);
@@ -122,7 +122,7 @@ esp_err_t esp_now_rx_init(void)
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     ESP_ERROR_CHECK(esp_wifi_start());
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
-    ESP_ERROR_CHECK(esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE));
+    ESP_ERROR_CHECK(esp_wifi_set_channel(11, WIFI_SECOND_CHAN_NONE));
     ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR));
 
     ESP_ERROR_CHECK(esp_now_init());

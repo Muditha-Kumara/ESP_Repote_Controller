@@ -20,7 +20,7 @@ static const char *TAG = "TransMeter";
 #define WIFI_PASSWORD "slengnet1"
 #define AP_SSID "Binaru"
 #define AP_PASSWORD "binaru123"
-#define MDNS_HOSTNAME "transmeter"
+#define MDNS_HOSTNAME "Binaru"
 #define WIFI_CHANNEL 11
 
 // Receiver MAC address (modify as needed)

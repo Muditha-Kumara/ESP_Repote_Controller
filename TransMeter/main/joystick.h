@@ -13,7 +13,7 @@ int joystick_init(void);
 
 /**
  * Read the latest joystick state into the existing packet structure.
- * When no controller is connected, the caller should transmit zeros.
+ * When no controller is connected or transmit is not enabled, the caller should transmit zeros.
  */
 int joystick_read(motor_control_t *motor_data);
 

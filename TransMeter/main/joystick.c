@@ -11,7 +11,7 @@
 
 static const char *TAG = "JOYSTICK";
 
-#define JOYSTICK_DEADZONE 30
+#define JOYSTICK_DEADZONE 10000
 
 // Adjust this for the board you are using.
 #define USB_VBUS_GPIO GPIO_NUM_10
@@ -53,6 +53,7 @@ static usb_device_handle_t dev_hdl;
 static usb_transfer_t *in_transfer;
 static bool usb_ready = false;
 static bool xbox_connected = false;
+static bool joystick_tx_enabled = false;
 static int8_t latest_lx = 0;
 static int8_t latest_ly = 0;
 static int8_t latest_left_motor = 0;
@@ -66,22 +67,31 @@ static void teleplot_send_i32(const char *series, int32_t value)
 
 static int8_t axis_to_int8(int16_t value)
 {
-    int32_t scaled = (int32_t)value * 127 / 32767;
+    if (value > -JOYSTICK_DEADZONE && value < JOYSTICK_DEADZONE)
+    {
+        return 0;
+    }
+
+    if (value > 0)
+    {
+        int32_t adjusted = (int32_t)value - JOYSTICK_DEADZONE;
+        int32_t range = 32767 - JOYSTICK_DEADZONE;
+        int32_t scaled = adjusted * 127 / range;
+        if (scaled > 127)
+        {
+            scaled = 127;
+        }
+        return (int8_t)scaled;
+    }
+
+    int32_t adjusted = (int32_t)(-value) - JOYSTICK_DEADZONE;
+    int32_t range = 32767 - JOYSTICK_DEADZONE;
+    int32_t scaled = adjusted * 127 / range;
     if (scaled > 127)
     {
         scaled = 127;
     }
-    if (scaled < -127)
-    {
-        scaled = -127;
-    }
-
-    if (scaled > -JOYSTICK_DEADZONE && scaled < JOYSTICK_DEADZONE)
-    {
-        scaled = 0;
-    }
-
-    return (int8_t)scaled;
+    return (int8_t)(-scaled);
 }
 
 static int8_t get_direction(int8_t speed)
@@ -225,6 +235,16 @@ static void hid_transfer_cb(usb_transfer_t *transfer)
 
         latest_lx = lx;
         latest_ly = ly;
+
+        bool b_pressed = (report.buttons_high & XBOX_BTN_B) != 0;
+        joystick_tx_enabled = b_pressed;
+
+        if (!joystick_tx_enabled)
+        {
+            left_motor = 0;
+            right_motor = 0;
+        }
+
         latest_left_motor = left_motor;
         latest_right_motor = right_motor;
 
@@ -245,6 +265,8 @@ static void hid_transfer_cb(usb_transfer_t *transfer)
         {
             teleplot_send_i32("xbox/rt", report.rt);
         }
+
+        teleplot_send_i32("xbox/b", b_pressed ? 1 : 0);
 
         prev_report = report;
     }
@@ -493,6 +515,16 @@ int joystick_read(motor_control_t *motor_data)
         return -1;
     }
 
+    if (!joystick_tx_enabled)
+    {
+        motor_data->motor1_speed = 0;
+        motor_data->motor1_direction = 0;
+        motor_data->motor2_speed = 0;
+        motor_data->motor2_direction = 0;
+        motor_data->timestamp = esp_log_timestamp();
+        return 0;
+    }
+
     motor_data->motor1_speed = latest_left_motor;
     motor_data->motor1_direction = get_direction(latest_left_motor);
     motor_data->motor2_speed = latest_right_motor;
@@ -543,6 +575,7 @@ void joystick_deinit(void)
 
     usb_ready = false;
     xbox_connected = false;
+    joystick_tx_enabled = false;
     latest_lx = 0;
     latest_ly = 0;
     latest_left_motor = 0;
