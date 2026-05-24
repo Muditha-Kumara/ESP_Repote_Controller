@@ -2,6 +2,7 @@
 
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -11,19 +12,24 @@
 
 static const char *TAG = "Receiver";
 
-#define COMMAND_TIMEOUT_MS 500
+#define COMMAND_TIMEOUT_MS 300
+
+static inline uint32_t monotonic_ms(void)
+{
+    return (uint32_t)(esp_timer_get_time() / 1000ULL);
+}
 
 static void command_watchdog_task(void *pvParameters)
 {
     (void)pvParameters;
 
     while (1) {
-        uint32_t age_ms = (uint32_t)(esp_log_timestamp() - esp_now_rx_get_last_seen_ms());
+        uint32_t age_ms = (uint32_t)(monotonic_ms() - esp_now_rx_get_last_seen_ms());
         if (age_ms > COMMAND_TIMEOUT_MS) {
             tb6612fng_stop();
         }
 
-        vTaskDelay(pdMS_TO_TICKS(50));
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
@@ -31,7 +37,7 @@ void app_main(void)
 {
     ESP_LOGI(TAG, "Receiver starting");
     ESP_LOGI(TAG, "Left motor pins: PWM GPIO21, IN1 GPIO18, IN2 GPIO19");
-    ESP_LOGI(TAG, "Right motor pins: PWM GPIO22, IN1 GPIO4, IN2 GPIO5");
+    ESP_LOGI(TAG, "Right motor pins: PWM GPIO22, IN1 GPIO16, IN2 GPIO17");
     ESP_LOGI(TAG, "TB6612 STBY pin: GPIO23");
 
     esp_err_t ret = nvs_flash_init();

@@ -1,6 +1,7 @@
 #include "esp_now_rx.h"
 
 #include <string.h>
+#include <stdbool.h>
 
 #include "esp_err.h"
 #include "esp_event.h"
@@ -10,6 +11,15 @@
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "tb6612fng.h"
+
+// Support a compact packet format that some transmitters send: signed left/right
+// motor values plus a 32-bit timestamp. This keeps the receiver compatible with
+// older and newer transmitters during a transition.
+typedef struct __attribute__((packed)) {
+    int8_t left;
+    int8_t right;
+    uint32_t timestamp;
+} compact_motor_control_t;
 
 static const char *TAG = "ESPNOW_RX";
 
@@ -78,12 +88,34 @@ static uint32_t now_ms(void)
 
 static void recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len)
 {
-    if (data == NULL || len != (int)sizeof(motor_control_t)) {
-        ESP_LOGW(TAG, "Ignoring packet with invalid size: %d", len);
+    if (data == NULL) {
+        ESP_LOGW(TAG, "NULL packet payload");
         return;
     }
 
-    memcpy(&latest_command, data, sizeof(latest_command));
+    bool parsed = false;
+
+    if (len == (int)sizeof(motor_control_t)) {
+        memcpy(&latest_command, data, sizeof(latest_command));
+        parsed = true;
+    } else if (len == (int)sizeof(compact_motor_control_t)) {
+        compact_motor_control_t c = {0};
+        memcpy(&c, data, sizeof(c));
+        latest_command.motor1_speed = c.left;
+        latest_command.motor1_direction = (c.left > 0) ? 1 : (c.left < 0 ? -1 : 0);
+        latest_command.motor2_speed = c.right;
+        latest_command.motor2_direction = (c.right > 0) ? 1 : (c.right < 0 ? -1 : 0);
+        latest_command.timestamp = c.timestamp;
+        parsed = true;
+        ESP_LOGI(TAG, "Parsed compact motor packet (left=%d right=%d ts=%u)", c.left, c.right, c.timestamp);
+    }
+
+    if (!parsed) {
+        ESP_LOGW(TAG, "Ignoring packet with invalid size: %d", len);
+        ESP_LOG_BUFFER_HEXDUMP(TAG, data, len, ESP_LOG_DEBUG);
+        return;
+    }
+
     last_seen_ms = now_ms();
 
     /* Log received packet details to serial for debugging/telemetry */
