@@ -138,7 +138,7 @@ int esp_now_tx_init(uint8_t long_range_enabled, uint8_t wifi_channel)
             return -1;
         }
 
-        ret = esp_wifi_set_mode(WIFI_MODE_STA);
+        ret = esp_wifi_set_mode(WIFI_MODE_AP);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "WiFi mode setting failed: %s", esp_err_to_name(ret));
             return -1;
@@ -165,7 +165,7 @@ int esp_now_tx_init(uint8_t long_range_enabled, uint8_t wifi_channel)
 
     if (long_range_enabled)
     {
-        ret = esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR);
+        ret = esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR);
         if (ret != ESP_OK)
         {
             ESP_LOGW(TAG, "Failed to enable LR protocol: %s", esp_err_to_name(ret));
@@ -222,7 +222,7 @@ int esp_now_tx_add_peer(const uint8_t *peer_addr, uint8_t wifi_channel)
     memcpy(configured_peer_addr, peer_addr, ESP_NOW_ETH_ALEN);
     peer_configured = true;
     peer.channel = wifi_channel;
-    peer.ifidx = WIFI_IF_STA;
+    peer.ifidx = WIFI_IF_AP;
     peer.encrypt = false;
 
     esp_err_t ret = esp_now_add_peer(&peer);

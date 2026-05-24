@@ -121,13 +121,13 @@ void app_main(void)
         nvs_flash_init();
     }
 
-    // Initialize WiFi and mDNS
-    ESP_LOGI(TAG, "Initializing WiFi (%s)...", WIFI_SSID);
-    if (wifi_init(WIFI_SSID, WIFI_PASSWORD, AP_SSID, AP_PASSWORD) != 0) {
+    // Initialize SoftAP and mDNS
+    ESP_LOGI(TAG, "Initializing SoftAP (%s)...", AP_SSID);
+    if (wifi_init(NULL, NULL, AP_SSID, AP_PASSWORD) != 0) {
         ESP_LOGE(TAG, "Failed to initialize WiFi");
         return;
     }
-    ESP_LOGI(TAG, "✓ WiFi initialization started");
+    ESP_LOGI(TAG, "✓ SoftAP initialization started");
 
     // Initialize mDNS early so it is ready when the STA gets an IP address.
     if (wifi_mdns_init(MDNS_HOSTNAME, WEB_SERVER_PORT) != 0)
@@ -135,17 +135,10 @@ void app_main(void)
         ESP_LOGW(TAG, "mDNS startup failed, continuing without hostname discovery");
     }
 
-    // Wait for WiFi connection
-    int retry_count = 0;
-    while (!wifi_is_connected() && retry_count < 50) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-        retry_count++;
-    }
-
     if (wifi_is_connected()) {
-        ESP_LOGI(TAG, "✓ WiFi connected: %s", wifi_get_local_ip());
+        ESP_LOGI(TAG, "✓ SoftAP active: %s", wifi_get_ap_ip());
     } else {
-        ESP_LOGW(TAG, "⚠ WiFi connection timeout, router control unavailable but SoftAP fallback is active");
+        ESP_LOGW(TAG, "⚠ SoftAP not reported active yet");
     }
 
     // Initialize ESP-NOW
@@ -175,11 +168,7 @@ void app_main(void)
     if (web_server_init(WEB_SERVER_PORT) == 0) {
         ESP_LOGI(TAG, "✓ Web Server started");
         web_server_update_drive_command(0, 0, 0);
-        if (wifi_is_connected()) {
-            ESP_LOGI(TAG, "  Access at: http://%s or http://transmeter.local",
-                     wifi_get_local_ip());
-        }
-        ESP_LOGI(TAG, "  Direct AP access: connect to SSID '%s' and open http://%s",
+        ESP_LOGI(TAG, "  Access point: connect to SSID '%s' and open http://%s",
                  AP_SSID, wifi_get_ap_ip());
     } else {
         ESP_LOGW(TAG, "⚠ Failed to initialize web server");
