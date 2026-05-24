@@ -14,6 +14,7 @@ static uint32_t tx_success_count = 0;
 static uint32_t tx_fail_count = 0;
 static uint8_t configured_peer_addr[ESP_NOW_ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 static bool peer_configured = false;
+static bool peer_long_range_enabled = false;
 
 #define TX_HISTORY_SIZE 32
 
@@ -163,19 +164,25 @@ int esp_now_tx_init(uint8_t long_range_enabled, uint8_t wifi_channel)
         ESP_LOGW(TAG, "WiFi channel setting failed: %s — continuing without forcing channel", esp_err_to_name(ret));
     }
 
+    ret = esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGW(TAG, "Failed to set standard AP protocol: %s", esp_err_to_name(ret));
+    }
+
     if (long_range_enabled)
     {
-        ret = esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR);
-        if (ret != ESP_OK)
-        {
-            ESP_LOGW(TAG, "Failed to enable LR protocol: %s", esp_err_to_name(ret));
-        }
-
         ret = esp_wifi_set_max_tx_power(80);
         if (ret != ESP_OK)
         {
             ESP_LOGW(TAG, "Failed to set max TX power: %s", esp_err_to_name(ret));
         }
+
+        peer_long_range_enabled = true;
+    }
+    else
+    {
+        peer_long_range_enabled = false;
     }
 
     // Initialize ESP-NOW
@@ -231,8 +238,18 @@ int esp_now_tx_add_peer(const uint8_t *peer_addr, uint8_t wifi_channel)
         return -1;
     }
 
-    // Note: Long range mode is configured at system level via esp_wifi_config_espnow_rate
-    // or via WiFi PHY settings. Per-peer rate configuration may not be available.
+    if (peer_long_range_enabled)
+    {
+        esp_now_rate_config_t rate_config = {0};
+        rate_config.phymode = WIFI_PHY_MODE_LR;
+        rate_config.rate = WIFI_PHY_RATE_LORA_250K;
+
+        ret = esp_now_set_peer_rate_config(peer_addr, &rate_config);
+        if (ret != ESP_OK)
+        {
+            ESP_LOGW(TAG, "Failed to set peer LR rate config: %s", esp_err_to_name(ret));
+        }
+    }
 
     ESP_LOGI(TAG, "Peer added successfully");
     return 0;

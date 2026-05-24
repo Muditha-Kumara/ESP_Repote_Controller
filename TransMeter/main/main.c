@@ -142,8 +142,8 @@ void app_main(void)
     }
 
     // Initialize ESP-NOW
-    ESP_LOGI(TAG, "Initializing ESP-NOW with long range mode...");
-    if (esp_now_tx_init(1, WIFI_CHANNEL) != 0) {  // 1 = long range enabled
+    ESP_LOGI(TAG, "Initializing ESP-NOW on AP channel %d...", WIFI_CHANNEL);
+    if (esp_now_tx_init(1, WIFI_CHANNEL) != 0) {
         ESP_LOGE(TAG, "Failed to initialize ESP-NOW");
         return;
     }
