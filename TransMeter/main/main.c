@@ -8,6 +8,7 @@
 #include "nvs_flash.h"
 
 #include "types.h"
+#include "joystick.h"
 #include "esp_now_tx.h"
 #include "wifi_config.h"
 #include "web_server.h"
@@ -20,7 +21,7 @@ static const char *TAG = "TransMeter";
 #define AP_SSID "Binaru"
 #define AP_PASSWORD "binaru123"
 #define MDNS_HOSTNAME "transmeter"
-#define WIFI_CHANNEL 1
+#define WIFI_CHANNEL 11
 
 // Receiver MAC address (modify as needed)
 // This should be the MAC address of your receiver device
@@ -35,7 +36,7 @@ static uint32_t packet_count = 0;
 
 /**
  * Main remote control task
- * Reads the latest browser command and sends ESP-NOW packets
+ * Reads joystick axes and sends ESP-NOW packets
  */
 static void remote_control_task(void *pvParameters)
 {
@@ -43,18 +44,20 @@ static void remote_control_task(void *pvParameters)
     motor_control_t motor_data = {0};
     link_metrics_t metrics = {0};
     TickType_t last_wake_time = xTaskGetTickCount();
-    remote_settings_t settings = {
-        .long_range_enabled = 1,
-        .power_level = 20,
-        .send_interval_ms = SEND_INTERVAL_MS,
-    };
-    strncpy(settings.wifi_ssid, WIFI_SSID, sizeof(settings.wifi_ssid) - 1);
-
-    web_server_update_settings(&settings);
 
     while (1) {
-        web_server_get_motor_data(&motor_data);
+        memset(&motor_data, 0, sizeof(motor_data));
+
+        if (joystick_is_connected())
+        {
+            if (joystick_read(&motor_data) != 0)
+            {
+                ESP_LOGW(TAG, "Failed to read joystick state");
+            }
+        }
         motor_data.timestamp = esp_log_timestamp();
+
+        web_server_update_motor_data(&motor_data);
 
         esp_now_tx_get_link_metrics(&metrics);
         web_server_update_link_metrics(metrics.receiver_rssi_dbm,
@@ -69,12 +72,10 @@ static void remote_control_task(void *pvParameters)
             if (packet_count % 20 == 0)
             {
                 ESP_LOGI(TAG,
-                         "Sent packet #%lu | M1:[%d,%d] M2:[%d,%d]",
+                         "Sent packet #%lu | M1:%d M2:%d",
                          packet_count,
                          motor_data.motor1_speed,
-                         motor_data.motor1_direction,
-                         motor_data.motor2_speed,
-                         motor_data.motor2_direction);
+                         motor_data.motor2_speed);
             }
         }
         else
@@ -160,6 +161,14 @@ void app_main(void)
         ESP_LOGW(TAG, "Failed to add receiver peer (broadcast will still work)");
     }
     ESP_LOGI(TAG, "✓ Receiver peer configured");
+
+    // Initialize USB joystick support.
+    if (joystick_init() != 0)
+    {
+        ESP_LOGE(TAG, "Failed to initialize USB joystick support");
+        return;
+    }
+    ESP_LOGI(TAG, "✓ USB joystick support initialized");
 
     // Initialize Web Server
     ESP_LOGI(TAG, "Initializing Web Server on port %d...", WEB_SERVER_PORT);
