@@ -23,7 +23,7 @@ static void command_watchdog_task(void *pvParameters)
             tb6612fng_stop();
         }
 
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 

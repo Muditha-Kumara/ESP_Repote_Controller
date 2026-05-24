@@ -17,10 +17,27 @@ int web_server_init(uint16_t port);
 void web_server_update_settings(const remote_settings_t *settings);
 
 /**
+ * Update AP/network state for display.
+ * @param settings: Pointer to remote_settings_t structure
+ * @param ap_channel: SoftAP channel in use
+ */
+void web_server_update_network_state(const remote_settings_t *settings, uint8_t ap_channel);
+
+/**
  * Update motor control status for display
  * @param motor_data: Pointer to motor_control_t structure
  */
 void web_server_update_motor_data(const motor_control_t *motor_data);
+
+/**
+ * Update joystick state for display.
+ */
+void web_server_update_joystick_state(uint8_t connected, uint8_t tx_enabled, int16_t lx, int16_t ly);
+
+/**
+ * Update packet count for display.
+ */
+void web_server_update_packet_count(uint32_t packet_count);
 
 /**
  * Update latest link metrics received from receiver telemetry

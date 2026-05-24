@@ -413,7 +413,7 @@ CONFIG_IDF_TARGET_ARCH="xtensa"
 # default:
 CONFIG_IDF_TARGET="esp32"
 # default:
-CONFIG_IDF_INIT_VERSION="6.0.1"
+CONFIG_IDF_INIT_VERSION="$IDF_INIT_VERSION"
 # default:
 CONFIG_IDF_TARGET_ESP32=y
 # default:
@@ -2160,17 +2160,11 @@ CONFIG_LOG_VERSION=1
 #
 # Log Level
 #
-# default:
 # CONFIG_LOG_DEFAULT_LEVEL_NONE is not set
-# default:
 # CONFIG_LOG_DEFAULT_LEVEL_ERROR is not set
-# default:
 # CONFIG_LOG_DEFAULT_LEVEL_WARN is not set
-# default:
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
-# default:
 # CONFIG_LOG_DEFAULT_LEVEL_DEBUG is not set
-# default:
 # CONFIG_LOG_DEFAULT_LEVEL_VERBOSE is not set
 # default:
 CONFIG_LOG_DEFAULT_LEVEL=3

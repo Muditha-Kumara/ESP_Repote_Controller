@@ -23,6 +23,11 @@ int joystick_read(motor_control_t *motor_data);
 bool joystick_is_connected(void);
 
 /**
+ * Check whether joystick transmission is currently enabled.
+ */
+bool joystick_is_tx_enabled(void);
+
+/**
  * Get the latest raw lx/ly values from the controller.
  */
 void joystick_get_raw_values(int16_t *lx, int16_t *ly);

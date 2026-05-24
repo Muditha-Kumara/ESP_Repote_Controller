@@ -1,9 +1,9 @@
 #include "web_server.h"
+
 #include "esp_http_server.h"
 #include "esp_log.h"
-#include <stdbool.h>
+
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 static const char *TAG = "WEB_SERVER";
@@ -12,9 +12,12 @@ static httpd_handle_t server = NULL;
 
 static motor_control_t current_motor_data = {0};
 static remote_settings_t current_settings = {0};
-static int16_t current_throttle = 0;
-static int16_t current_steer = 0;
-static uint8_t current_armed = 0;
+static uint8_t current_ap_channel = 0;
+static uint32_t current_packet_count = 0;
+static uint8_t current_joystick_connected = 0;
+static uint8_t current_joystick_tx_enabled = 0;
+static int16_t current_joystick_lx = 0;
+static int16_t current_joystick_ly = 0;
 static int8_t current_receiver_rssi_dbm = 0;
 static float current_estimated_distance_m = -1.0f;
 static uint32_t current_rtt_us = 0;
@@ -26,181 +29,195 @@ static const char index_html[] =
     "<head>"
     "<meta charset='UTF-8'>"
     "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
-    "<title>TransMeter Boat Pilot</title>"
+    "<title>TransMeter Boat Explorer</title>"
     "<style>"
     "*{box-sizing:border-box;margin:0;padding:0}"
-    "body{font-family:system-ui,sans-serif;min-height:100vh;color:#fff;background:radial-gradient(circle at top,#48b0ff 0,#0d1b3d 55%,#06101f 100%);overflow-x:hidden}"
-    "body:before,body:after{content:'';position:fixed;inset:auto;border-radius:50%;filter:blur(20px);opacity:.45;pointer-events:none}"
-    "body:before{width:260px;height:260px;left:-70px;top:20px;background:#4de1ff}"
-    "body:after{width:320px;height:320px;right:-120px;bottom:-60px;background:#ffcb4d}"
-    ".wrap{position:relative;max-width:1100px;margin:0 auto;padding:20px}"
-    ".hero{padding:18px 16px 10px;text-align:center}"
-    ".hero h1{font-size:clamp(2rem,5vw,4.2rem);letter-spacing:.04em;line-height:1.05}"
-    ".hero p{margin-top:10px;font-size:clamp(1rem,2vw,1.25rem);opacity:.9}"
-    ".badge{display:inline-flex;align-items:center;gap:10px;margin-top:14px;padding:10px 16px;border-radius:999px;background:rgba(255,255,255,.12);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.2)}"
-    ".dot{width:14px;height:14px;border-radius:50%;background:#ff6b6b;box-shadow:0 0 0 0 rgba(255,107,107,.7);animation:pulse 1.5s infinite}"
-    ".dot.on{background:#3dff9f;box-shadow:0 0 0 0 rgba(61,255,159,.7)}"
-    "@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(255,255,255,.45)}70%{box-shadow:0 0 0 16px rgba(255,255,255,0)}100%{box-shadow:0 0 0 0 rgba(255,255,255,0)}}"
-    ".grid{display:grid;grid-template-columns:1.1fr .9fr;gap:18px;margin-top:18px}"
-    ".card{background:rgba(9,18,40,.55);border:1px solid rgba(255,255,255,.16);border-radius:28px;backdrop-filter:blur(16px);box-shadow:0 25px 70px rgba(0,0,0,.32);overflow:hidden}"
-    ".card .inner{padding:18px}"
-    ".pad{position:relative;margin:10px auto 6px;width:min(82vw,380px);aspect-ratio:1;border-radius:34px;background:linear-gradient(145deg,rgba(255,255,255,.14),rgba(255,255,255,.05));border:2px solid rgba(255,255,255,.2);touch-action:none;user-select:none}"
-    ".pad:before,.pad:after{content:'';position:absolute;background:rgba(255,255,255,.16)}"
-    ".pad:before{inset:50% 18px auto 18px;height:2px;transform:translateY(-1px)}"
-    ".pad:after{left:50%;top:18px;bottom:18px;width:2px;transform:translateX(-1px)}"
-    ".glow{position:absolute;inset:18px;border-radius:26px;background:radial-gradient(circle at center,rgba(77,225,255,.18),transparent 60%)}"
-    ".puck{position:absolute;left:50%;top:50%;width:96px;height:96px;border-radius:28px;transform:translate(-50%,-50%);background:linear-gradient(135deg,#fff,#8fd3ff);box-shadow:0 18px 40px rgba(0,0,0,.35);display:grid;place-items:center;color:#0c1f3f;font-weight:900;font-size:18px;letter-spacing:.06em}"
-    ".puck small{display:block;font-size:11px;opacity:.75;letter-spacing:.18em}"
-    ".stats{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-top:14px}"
-    ".stat{padding:14px;border-radius:22px;background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.12)}"
-    ".label{font-size:.78rem;opacity:.76;text-transform:uppercase;letter-spacing:.14em}"
-    ".value{margin-top:8px;font-size:1.65rem;font-weight:800}"
-    ".motor-bars{display:grid;gap:14px;margin-top:8px}"
-    ".bar{position:relative;height:26px;border-radius:999px;background:rgba(255,255,255,.12);overflow:hidden}"
-    ".fill{height:100%;width:50%;border-radius:999px;transition:width .08s linear;background:linear-gradient(90deg,#41d1ff,#4dff9a)}"
-    ".bar span{position:absolute;inset:0;display:grid;place-items:center;font-size:.85rem;font-weight:800;color:#0a1933;text-shadow:0 1px 0 rgba(255,255,255,.5)}"
-    ".controls{display:flex;gap:12px;flex-wrap:wrap;margin-top:16px}"
-    "button{border:0;border-radius:20px;padding:16px 18px;font-size:1rem;font-weight:900;cursor:pointer;min-width:140px;box-shadow:0 10px 25px rgba(0,0,0,.24)}"
-    ".arm{background:linear-gradient(135deg,#34ffa5,#13c77d);color:#031318}"
-    ".stop{background:linear-gradient(135deg,#ff7c5c,#ff4d6d);color:#fff}"
-    ".hint{margin-top:12px;font-size:.95rem;line-height:1.45;opacity:.88}"
-    ".mini{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:12px}"
-    ".chip{padding:12px 10px;border-radius:18px;background:rgba(255,255,255,.09);text-align:center;font-weight:800}"
-    "@media (max-width:860px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:1fr 1fr}.puck{width:84px;height:84px}}"
-    "@media (max-width:520px){.wrap{padding:14px}.card{border-radius:22px}.stats,.mini{grid-template-columns:1fr}.controls button{flex:1;min-width:0}}"
+    "body{font-family:system-ui,sans-serif;min-height:100vh;color:#fff;background:radial-gradient(circle at top,#13315b 0,#08111f 52%,#02040a 100%);overflow-x:hidden}"
+    "body:before,body:after{content:'';position:fixed;border-radius:50%;filter:blur(48px);opacity:.25;pointer-events:none}"
+    "body:before{width:280px;height:280px;left:-60px;top:10%;background:#38bdf8}"
+    "body:after{width:360px;height:360px;right:-110px;bottom:5%;background:#fbbf24}"
+    ".wrap{max-width:1180px;margin:0 auto;padding:18px;position:relative}"
+    ".hero{text-align:center;padding:8px 8px 16px}"
+    ".hero h1{font-size:clamp(2.2rem,5vw,4.5rem);font-weight:900;letter-spacing:-0.03em;background:linear-gradient(90deg,#7dd3fc 0,#fbbf24 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent}"
+    ".hero p{max-width:780px;margin:10px auto 0;font-size:clamp(1rem,1.8vw,1.15rem);color:#b6c2d1;line-height:1.55}"
+    ".badge{display:inline-flex;align-items:center;gap:10px;margin-top:14px;padding:10px 16px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);backdrop-filter:blur(12px)}"
+    ".dot{width:12px;height:12px;border-radius:50%;background:#ef4444;box-shadow:0 0 0 0 rgba(239,68,68,.45)}"
+    ".dot.on{background:#22c55e;animation:pulse 2s infinite}"
+    "@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.55)}70%{box-shadow:0 0 0 10px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}"
+    ".grid{display:grid;grid-template-columns:1.15fr .85fr;gap:18px;margin-top:14px}"
+    ".card{background:rgba(8,14,26,.62);border:1px solid rgba(255,255,255,.08);border-radius:26px;backdrop-filter:blur(18px);box-shadow:0 22px 60px rgba(0,0,0,.35);overflow:hidden}"
+    ".inner{padding:18px}"
+    ".scene{position:relative;min-height:430px;border-radius:22px;overflow:hidden;background:linear-gradient(180deg,#0f172a 0%,#123b73 68%,#07101f 100%);border:1px solid rgba(255,255,255,.06)}"
+    ".sky-glow{position:absolute;right:24px;top:20px;width:100px;height:100px;border-radius:50%;background:radial-gradient(circle,#fff7c8 0,#fbbf24 35%,rgba(251,191,36,0) 70%);opacity:.9}"
+    ".water{position:absolute;left:0;right:0;bottom:0;height:42%;background:linear-gradient(180deg,rgba(34,211,238,.12) 0,rgba(14,165,233,.38) 36%,rgba(6,37,83,.9) 100%)}"
+    ".water:before,.water:after{content:'';position:absolute;left:-10%;right:-10%;height:44px;border-radius:50%;background:radial-gradient(circle at 50% 0,rgba(255,255,255,.18),rgba(255,255,255,0) 70%)}"
+    ".water:before{top:-12px;animation:wave 5s ease-in-out infinite}"
+    ".water:after{top:10px;opacity:.7;animation:wave 6.5s ease-in-out infinite reverse}"
+    "@keyframes wave{0%,100%{transform:translateX(-2%) scaleX(1)}50%{transform:translateX(2%) scaleX(1.05)}}"
+    ".boat-wrap{position:absolute;left:50%;bottom:13%;width:min(92vw,680px);transform:translateX(-50%)}"
+    ".boat-label{display:flex;justify-content:center;gap:10px;margin-bottom:12px;font-weight:900;letter-spacing:.12em;text-transform:uppercase;opacity:.95}"
+    ".boat{position:relative;height:220px;transition:transform .12s ease;filter:drop-shadow(0 18px 26px rgba(0,0,0,.35))}"
+    ".boat-body{position:absolute;left:50%;bottom:22px;width:min(100%,640px);height:128px;transform:translateX(-50%);background:linear-gradient(180deg,#7c3f19,#4f240b);clip-path:polygon(8% 16%,92% 16%,100% 50%,92% 84%,8% 84%,0 50%);border:3px solid rgba(255,255,255,.14);border-radius:24px}"
+    ".boat-deck{position:absolute;left:50%;bottom:62px;width:min(88%,548px);height:64px;transform:translateX(-50%);background:linear-gradient(180deg,#ffe08b,#f4a93c);clip-path:polygon(6% 22%,94% 22%,100% 50%,94% 78%,6% 78%,0 50%);border:3px solid rgba(255,255,255,.18);border-radius:18px}"
+    ".cabin{position:absolute;left:50%;bottom:95px;width:180px;height:82px;transform:translateX(-50%);background:linear-gradient(180deg,#f8fcff,#bcecff);border-radius:22px 22px 18px 18px;border:3px solid rgba(255,255,255,.35)}"
+    ".window{position:absolute;top:14px;width:34px;height:26px;border-radius:10px;background:linear-gradient(180deg,#86d8ff,#1e69ab);box-shadow:inset 0 -8px 16px rgba(255,255,255,.24)}"
+    ".window.left{left:28px}.window.right{right:28px}"
+    ".smoke{position:absolute;left:50%;bottom:155px;width:16px;height:16px;border-radius:50%;background:rgba(255,255,255,.45);transform:translateX(-50%);opacity:0}"
+    ".smoke.active{animation:smoke 3.2s ease-in-out infinite}"
+    ".smoke.second{animation-delay:.7s}"
+    "@keyframes smoke{0%,100%{opacity:0;transform:translateX(-50%) translateY(0) scale(.45)}25%{opacity:.8}65%{opacity:.25;transform:translateX(-50%) translateY(-16px) scale(1.1)}}"
+    ".motor{position:absolute;bottom:12px;width:188px;height:90px;border-radius:20px;background:linear-gradient(180deg,#3f4d5f,#202833);border:2px solid rgba(255,255,255,.16);cursor:pointer;transition:transform .15s ease,box-shadow .15s ease}"
+    ".motor:hover{transform:translateY(-4px) scale(1.02)}"
+    ".motor.active{box-shadow:0 0 0 3px rgba(109,239,255,.2),0 0 30px rgba(109,239,255,.25)}"
+    ".motor.left{left:38px}.motor.right{right:38px}"
+    ".motor .tag{position:absolute;left:12px;top:8px;font-size:.7rem;font-weight:900;letter-spacing:.12em;text-transform:uppercase;opacity:.8}"
+    ".motor .power{position:absolute;left:12px;bottom:10px;font-size:2rem;font-weight:900;line-height:1}"
+    ".motor .bar{position:absolute;right:12px;bottom:14px;width:92px;height:14px;border-radius:999px;background:rgba(255,255,255,.14);overflow:hidden}"
+    ".motor .bar i{display:block;height:100%;width:0;border-radius:999px;background:linear-gradient(90deg,#4dffb0,#6ee8ff,#ffd86a);transition:width .12s linear}"
+    ".propeller{position:absolute;top:16px;width:46px;height:46px;border-radius:50%;background:radial-gradient(circle,#d9f4ff 0,#8ab9d3 55%,#43586b 100%);border:2px solid rgba(255,255,255,.22)}"
+    ".propeller:before,.propeller:after{content:'';position:absolute;left:50%;top:50%;width:18px;height:48px;border-radius:50% 50% 45% 45%;background:linear-gradient(180deg,#fff,#85d8ff);transform-origin:center center}"
+    ".propeller:before{transform:translate(-50%,-50%) rotate(0deg)}"
+    ".propeller:after{transform:translate(-50%,-50%) rotate(90deg)}"
+    ".motor.active .propeller{animation:spin .7s linear infinite}"
+    ".motor.left .propeller{right:-14px}.motor.right .propeller{left:-14px}"
+    "@keyframes spin{to{transform:rotate(360deg)}}"
+    ".wake{position:absolute;left:50%;bottom:16px;width:min(92vw,680px);height:96px;transform:translateX(-50%);pointer-events:none}"
+    ".bubble{position:absolute;bottom:10px;width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,.9);opacity:0;animation:bubble 4s linear infinite}"
+    "@keyframes bubble{0%{transform:translateY(0) scale(.5);opacity:0}15%{opacity:.9}100%{transform:translateY(-78px) scale(1.5);opacity:0}}"
+    ".hint-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}"
+    ".pill{padding:9px 12px;border-radius:999px;background:rgba(255,255,255,.1);font-size:.86rem;font-weight:800}"
+    ".right-top{display:grid;grid-template-columns:1fr;gap:12px}"
+    ".signal-card{padding:16px;border-radius:22px;background:linear-gradient(180deg,rgba(255,255,255,.1),rgba(255,255,255,.05));border:1px solid rgba(255,255,255,.12)}"
+    ".signal-head{display:flex;justify-content:space-between;gap:10px;align-items:center}"
+    ".signal-head strong{font-size:.85rem;letter-spacing:.12em;text-transform:uppercase;opacity:.72}"
+    ".signal-head span{font-size:1.35rem;font-weight:900}"
+    ".meter{margin-top:12px;height:18px;border-radius:999px;background:rgba(255,255,255,.12);overflow:hidden}"
+    ".meter i{display:block;height:100%;width:0;background:linear-gradient(90deg,#ef4444 0,#f59e0b 35%,#fbbf24 60%,#22c55e 100%);transition:width .18s ease}"
+    ".subtle{margin-top:8px;color:#c8d5e5;font-size:.9rem;line-height:1.45}"
+    ".stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}"
+    ".stat{padding:12px;border-radius:18px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1)}"
+    ".stat .k{display:block;font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;opacity:.72}"
+    ".stat .v{display:block;margin-top:6px;font-size:1.05rem;font-weight:800}"
+    ".info-list{display:grid;gap:10px}"
+    ".info{padding:13px 14px;border-radius:18px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);display:flex;justify-content:space-between;gap:12px;align-items:center}"
+    ".info .k{font-size:.82rem;letter-spacing:.1em;text-transform:uppercase;opacity:.72}"
+    ".info .v{font-size:1rem;font-weight:800;text-align:right}"
+    ".status-line{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}"
+    ".chip{padding:9px 12px;border-radius:999px;background:rgba(255,255,255,.08);font-size:.85rem;font-weight:800}"
+    ".focus{position:absolute;inset:0;border-radius:22px;border:2px solid transparent;pointer-events:none;transition:border-color .2s ease}"
+    ".focus.left{border-color:rgba(110,232,255,.38)}"
+    ".focus.right{border-color:rgba(255,216,106,.45)}"
+    "@media (max-width:960px){.grid{grid-template-columns:1fr}.scene{min-height:390px}}"
+    "@media (max-width:640px){.wrap{padding:12px}.card{border-radius:22px}.stats{grid-template-columns:1fr}.motor{width:154px;height:84px}.motor .bar{width:62px}.boat{height:200px}.boat-wrap{width:96%}}"
     "</style>"
     "</head>"
     "<body>"
     "<div class='wrap'>"
     "<div class='hero'>"
-    "<h1>Boat Pilot</h1>"
-    "<p>Drag the pad to drive forward, backward, left, and right. If the router is down, connect to the TransMeter AP and use the same page.</p>"
+    "<h1>Boat Explorer</h1>"
+    "<p>Children can watch the boat move, learn which motor is stronger, and read the signal strength in one clean screen.</p>"
     "<div class='badge'><span id='connDot' class='dot'></span><span id='connText'>Connecting to boat...</span></div>"
     "</div>"
     "<div class='grid'>"
     "<section class='card'><div class='inner'>"
-    "<div class='label'>Touch control pad</div>"
-    "<div id='pad' class='pad'><div class='glow'></div><div id='puck' class='puck'><div><small>BOAT</small>GO</div></div></div>"
-    "<div class='controls'><button class='arm' id='armBtn'>ARM BOAT</button><button class='stop' id='stopBtn'>STOP</button></div>"
-    "<div class='hint'>Up and down control thrust. Left and right control steering. Release to go back to center.</div>"
+    "<div class='scene'>"
+    "<div class='sky-glow'></div><div class='water'></div><div class='focus' id='focusRing'></div>"
+    "<div class='boat-wrap'>"
+    "<div class='boat-label'><span id='boatEmoji'>🛟</span><span id='boatMood'>Resting</span></div>"
+    "<div class='boat' id='boat'>"
+    "<div class='boat-body'></div><div class='boat-deck'></div>"
+    "<div class='cabin'><div class='window left'></div><div class='window right'></div></div>"
+    "<div class='smoke' id='smoke1'></div><div class='smoke second' id='smoke2'></div>"
+    "<div class='motor left' id='leftMotorCard'><div class='tag'>Left motor</div><div class='power' id='leftMotorPowerText'>0%</div><div class='bar'><i id='leftMotorBar'></i></div><div class='propeller'></div></div>"
+    "<div class='motor right' id='rightMotorCard'><div class='tag'>Right motor</div><div class='power' id='rightMotorPowerText'>0%</div><div class='bar'><i id='rightMotorBar'></i></div><div class='propeller'></div></div>"
+    "<div class='wake' id='boatWake'></div>"
+    "</div></div>"
+    "<div class='hint-row'>"
+    "<div class='pill'>Tap a motor to spotlight it</div>"
+    "<div class='pill'>Bigger bars mean stronger push</div>"
+    "<div class='pill'>Signal strength stays visible on the right</div>"
+    "</div>"
     "</div></section>"
     "<section class='card'><div class='inner'>"
-    "<div class='label'>Live status</div>"
+    "<div class='right-top'>"
+    "<div class='signal-card'>"
+    "<div class='signal-head'><strong>Signal strength</strong><span id='signalText'>-- dBm</span></div>"
+    "<div class='meter'><i id='signalBar'></i></div>"
+    "<div class='subtle' id='signalHint'>Waiting for telemetry...</div>"
+    "</div>"
     "<div class='stats'>"
-    "<div class='stat'><div class='label'>Thrust motor</div><div class='value' id='throttleTxt'>0%</div></div>"
-    "<div class='stat'><div class='label'>Steering motor</div><div class='value' id='steerTxt'>0%</div></div>"
-    "<div class='stat'><div class='label'>Thrust direction</div><div class='value' id='leftTxt'>Stop</div></div>"
-    "<div class='stat'><div class='label'>Steer direction</div><div class='value' id='rightTxt'>Center</div></div>"
+    "<div class='stat'><span class='k'>Packets</span><span class='v' id='packetsTxt'>0</span></div>"
+    "<div class='stat'><span class='k'>Channel</span><span class='v' id='channelTxt'>--</span></div>"
+    "<div class='stat'><span class='k'>Distance</span><span class='v' id='distanceTxt'>-- m</span></div>"
+    "<div class='stat'><span class='k'>RTT</span><span class='v' id='rttTxt'>-- us</span></div>"
     "</div>"
-    "<div class='motor-bars'>"
-    "<div><div class='label'>Thrust level</div><div class='bar'><div id='leftBar' class='fill'></div><span id='leftBarTxt'>0</span></div></div>"
-    "<div><div class='label'>Steering level</div><div class='bar'><div id='rightBar' class='fill'></div><span id='rightBarTxt'>0</span></div></div>"
+    "<div class='info-list'>"
+    "<div class='info'><div class='k'>Joystick</div><div class='v' id='joyTxt'>Waiting</div></div>"
+    "<div class='info'><div class='k'>Drive gate</div><div class='v' id='gateTxt'>Stopped</div></div>"
+    "<div class='info'><div class='k'>Boat state</div><div class='v' id='boatStateTxt'>Idle</div></div>"
     "</div>"
-    "<div class='mini'>"
-    "<div class='chip' id='wifiChip'>WiFi: waiting</div>"
-    "<div class='chip' id='modeChip'>Mode: idle</div>"
-    "<div class='chip' id='signalChip'>Signal: -- dBm</div>"
-    "<div class='chip' id='distanceChip'>Distance: FTM required</div>"
-    "<div class='chip' id='packetsChip'>Packets: 0</div>"
+    "<div class='status-line'>"
+    "<div class='chip' id='wifiChip'>AP: --</div>"
+    "<div class='chip' id='linkChip'>Link: --</div>"
+    "<div class='chip' id='rawChip'>LX/LY: -- / --</div>"
     "</div>"
-    "</div></section>"
+    "</div></div></section>"
     "</div></div>"
     "<script>"
-    "let ws=null, armed=false, lastSend=0, packets=0, throttle=0, steer=0;"
-    "const pad=document.getElementById('pad'), puck=document.getElementById('puck');"
-    "const connDot=document.getElementById('connDot'), connText=document.getElementById('connText');"
-    "const throttleTxt=document.getElementById('throttleTxt'), steerTxt=document.getElementById('steerTxt');"
-    "const leftTxt=document.getElementById('leftTxt'), rightTxt=document.getElementById('rightTxt');"
-    "const leftBar=document.getElementById('leftBar'), rightBar=document.getElementById('rightBar');"
-    "const leftBarTxt=document.getElementById('leftBarTxt'), rightBarTxt=document.getElementById('rightBarTxt');"
-    "const armBtn=document.getElementById('armBtn'), stopBtn=document.getElementById('stopBtn');"
-    "const wifiChip=document.getElementById('wifiChip'), modeChip=document.getElementById('modeChip'), signalChip=document.getElementById('signalChip'), distanceChip=document.getElementById('distanceChip'), packetsChip=document.getElementById('packetsChip');"
+    "let activeSide='';"
+    "const connDot=document.getElementById('connDot'),connText=document.getElementById('connText');"
+    "const boat=document.getElementById('boat'),boatMood=document.getElementById('boatMood'),boatEmoji=document.getElementById('boatEmoji'),focusRing=document.getElementById('focusRing');"
+    "const leftMotorCard=document.getElementById('leftMotorCard'),rightMotorCard=document.getElementById('rightMotorCard');"
+    "const leftMotorPowerText=document.getElementById('leftMotorPowerText'),rightMotorPowerText=document.getElementById('rightMotorPowerText');"
+    "const leftMotorBar=document.getElementById('leftMotorBar'),rightMotorBar=document.getElementById('rightMotorBar');"
+    "const smoke1=document.getElementById('smoke1'),smoke2=document.getElementById('smoke2'),boatWake=document.getElementById('boatWake');"
+    "const signalText=document.getElementById('signalText'),signalBar=document.getElementById('signalBar'),signalHint=document.getElementById('signalHint');"
+    "const packetsTxt=document.getElementById('packetsTxt'),channelTxt=document.getElementById('channelTxt'),distanceTxt=document.getElementById('distanceTxt'),rttTxt=document.getElementById('rttTxt');"
+    "const joyTxt=document.getElementById('joyTxt'),gateTxt=document.getElementById('gateTxt'),boatStateTxt=document.getElementById('boatStateTxt');"
+    "const wifiChip=document.getElementById('wifiChip'),linkChip=document.getElementById('linkChip'),rawChip=document.getElementById('rawChip');"
     "function clamp(v,min,max){return Math.min(max,Math.max(min,v));}"
-    "function setConnected(ok,text){connDot.className='dot'+(ok?' on':'');connText.textContent=text;}"
-    "function motorStyle(value){return clamp(Math.abs(value),0,127)/127*100+'%';}"
-    "function motorText(value){if(value===0) return 'Stop'; return value>0 ? 'Forward' : 'Reverse';}"
-    "function steerText(value){if(value===0) return 'Center'; return value>0 ? 'Right' : 'Left';}"
-    "function render(){throttleTxt.textContent=Math.abs(throttle)+'%'; steerTxt.textContent=Math.abs(steer)+'%'; leftTxt.textContent=motorText(throttle); rightTxt.textContent=steerText(steer); leftBar.style.width=motorStyle(throttle); rightBar.style.width=motorStyle(steer); leftBarTxt.textContent=Math.abs(throttle); rightBarTxt.textContent=Math.abs(steer); modeChip.textContent='Mode: '+(armed?'armed':'safe');}"
-    "function sendState(force){if(!ws||ws.readyState!==1) return; const now=Date.now(); if(!force && now-lastSend<40) return; lastSend=now; const msg={type:'drive',throttle:throttle|0,steer:steer|0,armed:armed?1:0}; ws.send(JSON.stringify(msg));}"
-    "function stopBoat(){throttle=0;steer=0;armed=false;render();sendState(true); armBtn.textContent='ARM BOAT';}"
-    "function setFromPointer(ev){const r=pad.getBoundingClientRect(); const x=clamp((ev.clientX-r.left)/r.width,0,1)*2-1; const y=clamp((ev.clientY-r.top)/r.height,0,1)*2-1; steer=Math.round(x*127); throttle=Math.round(-y*127); const puckX=((x*0.5)+0.5)*(r.width-96)+48; const puckY=((y*0.5)+0.5)*(r.height-96)+48; puck.style.left=puckX+'px'; puck.style.top=puckY+'px'; render(); sendState(false);}"
-    "function centerPad(){const r=pad.getBoundingClientRect(); steer=0; throttle=0; puck.style.left='50%'; puck.style.top='50%'; render(); sendState(true);}"
-    "pad.addEventListener('pointerdown',e=>{if(!armed) return; pad.setPointerCapture(e.pointerId); setFromPointer(e);});"
-    "pad.addEventListener('pointermove',e=>{if(!armed||e.buttons===0) return; setFromPointer(e);});"
-    "pad.addEventListener('pointerup',()=>centerPad()); pad.addEventListener('pointercancel',()=>centerPad()); pad.addEventListener('pointerleave',()=>{if(armed) centerPad();});"
-    "armBtn.onclick=()=>{armed=!armed; armBtn.textContent=armed?'DISARM BOAT':'ARM BOAT'; render(); sendState(true);};"
-    "stopBtn.onclick=()=>stopBoat();"
-    "function connect(){const proto=location.protocol==='https:'?'wss':'ws'; ws=new WebSocket(proto+'://'+location.host+'/ws'); ws.onopen=()=>{setConnected(true,'Boat link ready'); wifiChip.textContent='WiFi: connected'; sendState(true);}; ws.onclose=()=>{setConnected(false,'Reconnecting...'); wifiChip.textContent='WiFi: offline'; setTimeout(connect,1200);}; ws.onerror=()=>{setConnected(false,'Link error');}; ws.onmessage=ev=>{try{const d=JSON.parse(ev.data); if(typeof d.throttle==='number') throttle=d.throttle; if(typeof d.steer==='number') steer=d.steer; if(typeof d.armed!=='undefined') armed=!!d.armed; if(d.packets!==undefined){packets=d.packets; packetsChip.textContent='Packets: '+packets;} if(typeof d.rssi==='number'){signalChip.textContent='Signal: '+d.rssi+' dBm';} if(typeof d.distance_m==='number'&&d.distance_m>=0){distanceChip.textContent='Distance: '+d.distance_m.toFixed(1)+' m';} else {distanceChip.textContent='Distance: FTM required';} if(d.left!==undefined&&d.right!==undefined){leftTxt.textContent=d.left; rightTxt.textContent=d.right;} render();}catch(_e){}};}"
-    "render(); centerPad(); connect(); setInterval(()=>sendState(false),100);"
-    "</script></body></html>";
-
-static int clamp_int(int value, int min_value, int max_value)
-{
-    if (value < min_value)
-    {
-        return min_value;
-    }
-    if (value > max_value)
-    {
-        return max_value;
-    }
-    return value;
-}
-
-static int8_t clamp_int8(int value)
-{
-    return (int8_t)clamp_int(value, -127, 127);
-}
-
-static void command_to_motor(int16_t throttle, int16_t steer, motor_control_t *motor_data)
-{
-    motor_data->motor1_speed = clamp_int8((clamp_int(throttle, -100, 100) * 127) / 100);
-    motor_data->motor1_direction = (motor_data->motor1_speed > 0) ? 1 : (motor_data->motor1_speed < 0 ? -1 : 0);
-
-    motor_data->motor2_speed = clamp_int8((clamp_int(abs(steer), 0, 100) * 127) / 100);
-    motor_data->motor2_direction = (steer > 0) ? 1 : (steer < 0 ? -1 : 0);
-    motor_data->timestamp = esp_log_timestamp();
-}
-
-static bool json_get_int(const char *json, const char *key, int *value)
-{
-    char pattern[24];
-    const char *cursor = NULL;
-
-    snprintf(pattern, sizeof(pattern), "\"%s\":", key);
-    cursor = strstr(json, pattern);
-    if (cursor == NULL)
-    {
-        return false;
-    }
-
-    cursor += strlen(pattern);
-    *value = (int)strtol(cursor, NULL, 10);
-    return true;
-}
-
-static void update_control_state(int16_t throttle, int16_t steer, uint8_t armed)
-{
-    current_throttle = clamp_int(throttle, -100, 100);
-    current_steer = clamp_int(steer, -100, 100);
-    current_armed = armed ? 1 : 0;
-
-    if (!current_armed)
-    {
-        current_throttle = 0;
-        current_steer = 0;
-    }
-
-    command_to_motor(current_throttle, current_steer, &current_motor_data);
-    if (!current_armed)
-    {
-        current_motor_data.motor1_speed = 0;
-        current_motor_data.motor2_speed = 0;
-        current_motor_data.motor1_direction = 0;
-        current_motor_data.motor2_direction = 0;
-    }
-}
-
+    "function setActiveSide(side){activeSide=side;focusRing.className='focus'+(side==='left'?' left':side==='right'?' right':'');leftMotorCard.classList.toggle('active',side==='left');rightMotorCard.classList.toggle('active',side==='right');}"
+    "function signalPercentFromRssi(rssi){return clamp(((rssi+100)/60)*100,0,100);}"
+    "function signalLabel(rssi){if(rssi>=-55) return 'Excellent'; if(rssi>=-67) return 'Strong'; if(rssi>=-78) return 'Okay'; return 'Weak';}"
+    "function directionName(left,right){if(left===0&&right===0) return 'Drifting'; if(Math.abs(left-right)<12) return left>=0 ? 'Sailing straight' : 'Backing straight'; if(left>right) return 'Turning right'; return 'Turning left';}"
+    "function moodForPower(value){if(value===0) return 'Resting'; if(value<30) return 'Little splashes'; if(value<75) return 'Zooming'; return 'Super zoom!';}"
+    "function bubbleBurst(left,right){if(Math.max(Math.abs(left),Math.abs(right))<10) return; for(let i=0;i<4;i++){const bubble=document.createElement('div');bubble.className='bubble';bubble.style.left=(18+Math.random()*64)+'%';bubble.style.width=bubble.style.height=(4+Math.random()*9)+'px';bubble.style.animationDelay=(Math.random()*1.2)+'s';bubble.style.setProperty('--mx',((right-left)/3+(Math.random()*28-14))+'px');boatWake.appendChild(bubble);setTimeout(()=>bubble.remove(),4200);}}"
+    "function renderStatus(d){"
+    "const left=Number(d.left||d.motor1_speed||0);"
+    "const right=Number(d.right||d.motor2_speed||0);"
+    "const valid=!!d.link_valid;"
+    "connDot.className='dot'+(valid?' on':'');"
+    "connText.textContent=valid?'Boat telemetry active':'Waiting for boat...';"
+    "leftMotorPowerText.textContent=Math.abs(left)+'%';rightMotorPowerText.textContent=Math.abs(right)+'%';"
+    "leftMotorBar.style.width=clamp(Math.abs(left),0,127)/127*100+'%';rightMotorBar.style.width=clamp(Math.abs(right),0,127)/127*100+'%';"
+    "const maxPower=Math.max(Math.abs(left),Math.abs(right));"
+    "boatMood.textContent=moodForPower(maxPower);"
+    "boatEmoji.textContent=maxPower===0?'🛟':(maxPower<40?'⛵':'🚀');"
+    "smoke1.classList.toggle('active',maxPower>0);smoke2.classList.toggle('active',maxPower>55);"
+    "boat.style.transform='translateY('+clamp(-(left+right)/45,-8,8)+'px) rotate('+clamp((right-left)/22,-8,8)+'deg)';"
+    "const direction=directionName(left,right);"
+    "boatStateTxt.textContent=direction;"
+    "if(Math.abs(left-right)<12){setActiveSide('');}else if(left>right){setActiveSide('left');}else{setActiveSide('right');}"
+    "bubbleBurst(left,right);"
+    "signalText.textContent=(typeof d.rssi==='number'?d.rssi:'--')+' dBm';"
+    "if(typeof d.rssi==='number'){const pct=signalPercentFromRssi(d.rssi);signalBar.style.width=pct+'%';signalHint.textContent=signalLabel(d.rssi)+' link strength';}else{signalBar.style.width='0%';signalHint.textContent='Waiting for telemetry...';}"
+    "packetsTxt.textContent=d.packets||0;"
+    "channelTxt.textContent='Ch '+(d.ap_channel||'--');"
+    "distanceTxt.textContent=(typeof d.distance_m==='number'&&d.distance_m>=0)?d.distance_m.toFixed(1)+' m':'-- m';"
+    "rttTxt.textContent=(d.rtt_us||0)+' us';"
+    "joyTxt.textContent=d.joystick_connected?(d.joystick_active?'Connected, transmitting':'Connected, idle'):'No controller';"
+    "gateTxt.textContent=d.joystick_active?'Transmitting':'Stopped';"
+    "wifiChip.textContent='AP: '+(d.wifi_ssid||'--')+' ch'+(d.ap_channel||'--');"
+    "linkChip.textContent=valid?'Link: live':'Link: down';"
+    "rawChip.textContent='LX/LY: '+(typeof d.lx==='number'?d.lx:'--')+' / '+(typeof d.ly==='number'?d.ly:'--');"
+    "}"
+    "function refresh(){fetch('/api/status').then(r=>r.json()).then(renderStatus).catch(()=>{connDot.className='dot';connText.textContent='Connecting to boat...';});}"
+    "leftMotorCard.addEventListener('click',()=>setActiveSide(activeSide==='left'?'':'left'));"
+    "rightMotorCard.addEventListener('click',()=>setActiveSide(activeSide==='right'?'':'right'));"
+    "refresh();setInterval(refresh,350);setInterval(()=>bubbleBurst(30,30),3500);"
+    "</script>"
+    "</body>"
+    "</html>";
 static esp_err_t http_get_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
@@ -209,19 +226,23 @@ static esp_err_t http_get_handler(httpd_req_t *req)
 
 static esp_err_t http_api_status_handler(httpd_req_t *req)
 {
-    char json_buffer[320];
+    char json_buffer[512];
     snprintf(json_buffer, sizeof(json_buffer),
-             "{\"throttle\":%d,\"steer\":%d,\"armed\":%u,\"motor1_speed\":%d,\"motor1_direction\":%d,\"motor2_speed\":%d,\"motor2_direction\":%d,\"packets\":%lu,\"wifi_ssid\":\"%s\",\"long_range_enabled\":%u,\"rssi\":%d,\"distance_m\":%.3f,\"rtt_us\":%lu,\"link_valid\":%u}",
-             current_throttle,
-             current_steer,
-             current_armed,
+             "{\"motor1_speed\":%d,\"motor1_direction\":%d,\"motor2_speed\":%d,\"motor2_direction\":%d,\"left\":%d,\"right\":%d,\"packets\":%lu,\"wifi_ssid\":\"%s\",\"ap_channel\":%u,\"long_range_enabled\":%u,\"joystick_connected\":%u,\"joystick_active\":%u,\"lx\":%d,\"ly\":%d,\"rssi\":%d,\"distance_m\":%.3f,\"rtt_us\":%lu,\"link_valid\":%u}",
              current_motor_data.motor1_speed,
              current_motor_data.motor1_direction,
              current_motor_data.motor2_speed,
              current_motor_data.motor2_direction,
-             (unsigned long)current_motor_data.timestamp,
+             current_motor_data.motor1_speed,
+             current_motor_data.motor2_speed,
+             (unsigned long)current_packet_count,
              current_settings.wifi_ssid,
+             current_ap_channel,
              current_settings.long_range_enabled,
+             current_joystick_connected,
+             current_joystick_tx_enabled,
+             current_joystick_lx,
+             current_joystick_ly,
              current_receiver_rssi_dbm,
              (double)current_estimated_distance_m,
              (unsigned long)current_rtt_us,
@@ -229,75 +250,6 @@ static esp_err_t http_api_status_handler(httpd_req_t *req)
 
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, json_buffer, HTTPD_RESP_USE_STRLEN);
-}
-
-static esp_err_t ws_handler(httpd_req_t *req)
-{
-    if (req->method == HTTP_GET)
-    {
-        ESP_LOGI(TAG, "WebSocket client connected");
-        return ESP_OK;
-    }
-
-    httpd_ws_frame_t frame = {0};
-    frame.type = HTTPD_WS_TYPE_TEXT;
-
-    esp_err_t ret = httpd_ws_recv_frame(req, &frame, 0);
-    if (ret != ESP_OK)
-    {
-        ESP_LOGW(TAG, "Failed to read websocket frame length: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
-    if (frame.len == 0 || frame.len > 255)
-    {
-        return ESP_FAIL;
-    }
-
-    uint8_t payload[256] = {0};
-    frame.payload = payload;
-    ret = httpd_ws_recv_frame(req, &frame, sizeof(payload) - 1);
-    if (ret != ESP_OK)
-    {
-        ESP_LOGW(TAG, "Failed to read websocket payload: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
-    payload[frame.len] = '\0';
-
-    int throttle = current_throttle;
-    int steer = current_steer;
-    int armed = current_armed;
-
-    (void)json_get_int((const char *)payload, "throttle", &throttle);
-    (void)json_get_int((const char *)payload, "steer", &steer);
-    (void)json_get_int((const char *)payload, "armed", &armed);
-
-    update_control_state((int16_t)throttle, (int16_t)steer, (uint8_t)armed);
-
-    char response[320];
-    snprintf(response, sizeof(response),
-             "{\"throttle\":%d,\"steer\":%d,\"armed\":%u,\"left\":%d,\"right\":%d,\"packets\":%lu,\"rssi\":%d,\"distance_m\":%.3f,\"rtt_us\":%lu,\"link_valid\":%u}",
-             current_throttle,
-             current_steer,
-             current_armed,
-             current_motor_data.motor1_speed,
-             current_motor_data.motor2_speed,
-             (unsigned long)current_motor_data.timestamp,
-             current_receiver_rssi_dbm,
-             (double)current_estimated_distance_m,
-             (unsigned long)current_rtt_us,
-             current_link_valid);
-
-    httpd_ws_frame_t out = {
-        .final = true,
-        .fragmented = false,
-        .type = HTTPD_WS_TYPE_TEXT,
-        .payload = (uint8_t *)response,
-        .len = strlen(response),
-    };
-
-    return httpd_ws_send_frame(req, &out);
 }
 
 static const httpd_uri_t uri_root = {
@@ -314,25 +266,15 @@ static const httpd_uri_t uri_status = {
     .user_ctx = NULL,
 };
 
-static const httpd_uri_t uri_ws = {
-    .uri = "/ws",
-    .method = HTTP_GET,
-    .handler = ws_handler,
-    .user_ctx = NULL,
-    .is_websocket = true,
-    .handle_ws_control_frames = false,
-    .supported_subprotocol = NULL,
-};
-
 int web_server_init(uint16_t port)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = port;
     config.stack_size = 8192;
-    config.max_uri_handlers = 12;
+    config.max_uri_handlers = 4;
     config.lru_purge_enable = true;
 
-    ESP_LOGI(TAG, "Starting websocket web server on port %u", port);
+    ESP_LOGI(TAG, "Starting read-only web server on port %u", port);
     esp_err_t ret = httpd_start(&server, &config);
     if (ret != ESP_OK)
     {
@@ -354,14 +296,6 @@ int web_server_init(uint16_t port)
         return -1;
     }
 
-    ret = httpd_register_uri_handler(server, &uri_ws);
-    if (ret != ESP_OK)
-    {
-        ESP_LOGE(TAG, "Failed to register websocket handler: %s", esp_err_to_name(ret));
-        return -1;
-    }
-
-    update_control_state(0, 0, 0);
     ESP_LOGI(TAG, "Web server started successfully");
     return 0;
 }
@@ -374,12 +308,31 @@ void web_server_update_settings(const remote_settings_t *settings)
     }
 }
 
+void web_server_update_network_state(const remote_settings_t *settings, uint8_t ap_channel)
+{
+    web_server_update_settings(settings);
+    current_ap_channel = ap_channel;
+}
+
 void web_server_update_motor_data(const motor_control_t *motor_data)
 {
     if (motor_data != NULL)
     {
         memcpy(&current_motor_data, motor_data, sizeof(current_motor_data));
     }
+}
+
+void web_server_update_joystick_state(uint8_t connected, uint8_t tx_enabled, int16_t lx, int16_t ly)
+{
+    current_joystick_connected = connected ? 1 : 0;
+    current_joystick_tx_enabled = tx_enabled ? 1 : 0;
+    current_joystick_lx = lx;
+    current_joystick_ly = ly;
+}
+
+void web_server_update_packet_count(uint32_t packet_count)
+{
+    current_packet_count = packet_count;
 }
 
 void web_server_update_link_metrics(int8_t rssi_dbm, float distance_m, uint32_t rtt_us, uint8_t valid)
@@ -392,7 +345,9 @@ void web_server_update_link_metrics(int8_t rssi_dbm, float distance_m, uint32_t 
 
 void web_server_update_drive_command(int16_t throttle, int16_t steer, uint8_t armed)
 {
-    update_control_state(throttle, steer, armed);
+    (void)throttle;
+    (void)steer;
+    (void)armed;
 }
 
 void web_server_get_motor_data(motor_control_t *motor_data)

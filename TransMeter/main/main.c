@@ -43,6 +43,8 @@ static void remote_control_task(void *pvParameters)
     ESP_LOGI(TAG, "Remote control task started");
     motor_control_t motor_data = {0};
     link_metrics_t metrics = {0};
+    int16_t lx = 0;
+    int16_t ly = 0;
     TickType_t last_wake_time = xTaskGetTickCount();
 
     while (1) {
@@ -50,13 +52,20 @@ static void remote_control_task(void *pvParameters)
 
         if (joystick_is_connected())
         {
+            joystick_get_raw_values(&lx, &ly);
             if (joystick_read(&motor_data) != 0)
             {
                 ESP_LOGW(TAG, "Failed to read joystick state");
             }
         }
+        else
+        {
+            lx = 0;
+            ly = 0;
+        }
         motor_data.timestamp = esp_log_timestamp();
 
+        web_server_update_joystick_state(joystick_is_connected(), joystick_is_tx_enabled(), lx, ly);
         web_server_update_motor_data(&motor_data);
 
         esp_now_tx_get_link_metrics(&metrics);
@@ -82,6 +91,8 @@ static void remote_control_task(void *pvParameters)
         {
             ESP_LOGW(TAG, "Failed to send packet");
         }
+
+        web_server_update_packet_count(packet_count);
 
         vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(SEND_INTERVAL_MS));
     }
@@ -110,7 +121,7 @@ void app_main(void)
     ESP_LOGI(TAG, "========== Remote Controller Transmitter Initialized ==========");
     ESP_LOGI(TAG, "FW Version: 1.0.0");
     ESP_LOGI(TAG, "ESP-NOW Long Range Mode: ENABLED");
-    ESP_LOGI(TAG, "Control Mode: WebSocket drive pad");
+    ESP_LOGI(TAG, "Control Mode: Read-only boat dashboard");
     ESP_LOGI(TAG, "Build Date: %s %s", __DATE__, __TIME__);
 
     // Initialize NVS (Non-Volatile Storage)
@@ -128,6 +139,15 @@ void app_main(void)
         return;
     }
     ESP_LOGI(TAG, "✓ SoftAP initialization started");
+
+    remote_settings_t settings = {
+        .long_range_enabled = 1,
+        .power_level = 0,
+        .send_interval_ms = SEND_INTERVAL_MS,
+    };
+    snprintf(settings.wifi_ssid, sizeof(settings.wifi_ssid), "%s", AP_SSID);
+    snprintf(settings.wifi_password, sizeof(settings.wifi_password), "%s", AP_PASSWORD);
+    web_server_update_network_state(&settings, WIFI_CHANNEL);
 
     // Initialize mDNS early so it is ready when the STA gets an IP address.
     if (wifi_mdns_init(MDNS_HOSTNAME, WEB_SERVER_PORT) != 0)
@@ -167,7 +187,7 @@ void app_main(void)
     ESP_LOGI(TAG, "Initializing Web Server on port %d...", WEB_SERVER_PORT);
     if (web_server_init(WEB_SERVER_PORT) == 0) {
         ESP_LOGI(TAG, "✓ Web Server started");
-        web_server_update_drive_command(0, 0, 0);
+        web_server_update_network_state(&settings, WIFI_CHANNEL);
         ESP_LOGI(TAG, "  Access point: connect to SSID '%s' and open http://%s",
                  AP_SSID, wifi_get_ap_ip());
     } else {
@@ -176,7 +196,7 @@ void app_main(void)
 
     ESP_LOGI(TAG, "==========================================================");
     ESP_LOGI(TAG, "System initialization complete!");
-    ESP_LOGI(TAG, "Ready to transmit motor control commands");
+    ESP_LOGI(TAG, "Ready for live telemetry dashboard and ESP-NOW control");
     ESP_LOGI(TAG, "==========================================================");
 
     // Create tasks on CPU 1 so CPU 0 can service WiFi/LwIP and idle watchdog.

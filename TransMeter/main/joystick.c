@@ -538,6 +538,11 @@ bool joystick_is_connected(void)
     return xbox_connected;
 }
 
+bool joystick_is_tx_enabled(void)
+{
+    return joystick_tx_enabled;
+}
+
 void joystick_get_raw_values(int16_t *lx, int16_t *ly)
 {
     if (lx != NULL)
