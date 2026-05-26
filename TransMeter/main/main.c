@@ -93,6 +93,7 @@ void app_main(void)
     ESP_LOGI(TAG, "========== Remote Controller Transmitter Initialized ==========");
     ESP_LOGI(TAG, "FW Version: 1.0.0");
     ESP_LOGI(TAG, "ESP-NOW Long Range Mode: ENABLED");
+    ESP_LOGI(TAG, "FTM distance measurement: enabled when the receiver responds");
     ESP_LOGI(TAG, "WiFi Mode: SoftAP only");
     ESP_LOGI(TAG, "Control Mode: WebSocket drive pad over AP");
     ESP_LOGI(TAG, "Build Date: %s %s", __DATE__, __TIME__);

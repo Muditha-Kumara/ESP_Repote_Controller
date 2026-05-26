@@ -1,6 +1,7 @@
 #include "esp_now_tx.h"
 #include "esp_wifi.h"
 #include "esp_now.h"
+#include "esp_event.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -14,6 +15,12 @@ static uint32_t tx_success_count = 0;
 static uint32_t tx_fail_count = 0;
 static uint8_t configured_peer_addr[ESP_NOW_ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 static bool peer_configured = false;
+
+#if CONFIG_ESP_WIFI_FTM_ENABLE
+static bool ftm_session_in_progress = false;
+static uint32_t last_ftm_request_ms = 0;
+static const uint32_t ftm_request_interval_ms = 1500;
+#endif
 
 #define TX_HISTORY_SIZE 32
 
@@ -58,6 +65,79 @@ static void record_sent_timestamp(uint32_t timestamp_ms)
     tx_history[tx_history_index].sent_time_us = (uint64_t)esp_timer_get_time();
     tx_history_index = (uint8_t)((tx_history_index + 1) % TX_HISTORY_SIZE);
 }
+
+#if CONFIG_ESP_WIFI_FTM_ENABLE
+static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
+{
+    (void)arg;
+
+    if (event_base != WIFI_EVENT || event_id != WIFI_EVENT_FTM_REPORT || event_data == NULL)
+    {
+        return;
+    }
+
+    const wifi_event_ftm_report_t *event = (const wifi_event_ftm_report_t *)event_data;
+    float distance_m = -1.0f;
+    uint32_t rtt_us = 0;
+    uint8_t valid = 0;
+
+    if (event->status == FTM_STATUS_SUCCESS)
+    {
+        distance_m = (float)event->dist_est / 100.0f;
+        rtt_us = event->rtt_est / 1000U;
+        valid = 1;
+    }
+
+    portENTER_CRITICAL(&metrics_mux);
+    latest_metrics.estimated_distance_m = distance_m;
+    latest_metrics.round_trip_time_us = rtt_us;
+    latest_metrics.last_update_ms = (uint32_t)esp_log_timestamp();
+    latest_metrics.valid = valid;
+    portEXIT_CRITICAL(&metrics_mux);
+
+    ftm_session_in_progress = false;
+
+    if (event->status == FTM_STATUS_SUCCESS)
+    {
+        ESP_LOGI(TAG, "FTM distance updated: %.2f m", distance_m);
+    }
+    else
+    {
+        ESP_LOGW(TAG, "FTM report failed with status %d", event->status);
+    }
+}
+
+static int request_ftm_measurement(const uint8_t *peer_addr)
+{
+    if (peer_addr == NULL)
+    {
+        return -1;
+    }
+
+    uint32_t now_ms = (uint32_t)esp_log_timestamp();
+    if (ftm_session_in_progress || (now_ms - last_ftm_request_ms) < ftm_request_interval_ms)
+    {
+        return 0;
+    }
+
+    wifi_ftm_initiator_cfg_t cfg = {0};
+    memcpy(cfg.resp_mac, peer_addr, ESP_NOW_ETH_ALEN);
+    cfg.channel = 1;
+    cfg.frm_count = 16;
+    cfg.burst_period = 0;
+
+    esp_err_t ret = esp_wifi_ftm_initiate_session(&cfg);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGW(TAG, "FTM initiate failed: %s", esp_err_to_name(ret));
+        return -1;
+    }
+
+    ftm_session_in_progress = true;
+    last_ftm_request_ms = now_ms;
+    return 0;
+}
+#endif
 
 /**
  * ESP-NOW send callback
@@ -117,6 +197,13 @@ static void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t 
     latest_metrics.last_update_ms = (uint32_t)esp_log_timestamp();
     latest_metrics.valid = 1;
     portEXIT_CRITICAL(&metrics_mux);
+
+#if CONFIG_ESP_WIFI_FTM_ENABLE
+    if (recv_info != NULL && recv_info->src_addr != NULL)
+    {
+        request_ftm_measurement(recv_info->src_addr);
+    }
+#endif
 }
 
 /**
@@ -198,7 +285,16 @@ int esp_now_tx_init(uint8_t long_range_enabled, uint8_t wifi_channel)
         return -1;
     }
 
-    ESP_LOGW(TAG, "Distance from ESP-NOW RTT is disabled. Use Wi-Fi FTM with FTM-capable peers for real ranging.");
+#if CONFIG_ESP_WIFI_FTM_ENABLE
+    ret = esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_FTM_REPORT, wifi_event_handler, NULL);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "FTM report handler registration failed: %s", esp_err_to_name(ret));
+        return -1;
+    }
+#endif
+
+    ESP_LOGI(TAG, "Wi-Fi FTM distance measurement is enabled for telemetry from the receiver peer.");
 
     // Enable long range mode if requested
     if (long_range_enabled) {

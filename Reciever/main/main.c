@@ -30,9 +30,10 @@ static void command_watchdog_task(void *pvParameters)
 void app_main(void)
 {
     ESP_LOGI(TAG, "Receiver starting");
-    ESP_LOGI(TAG, "Thrust motor pins: PWM GPIO21, IN1 GPIO18, IN2 GPIO19");
-    ESP_LOGI(TAG, "Steering motor pins: PWM GPIO22, IN1 GPIO4, IN2 GPIO5");
+    ESP_LOGI(TAG, "Motor 1 pins: PWM GPIO21, IN1 GPIO18, IN2 GPIO19");
+    ESP_LOGI(TAG, "Motor 2 pins: PWM GPIO22, IN1 GPIO4, IN2 GPIO5");
     ESP_LOGI(TAG, "TB6612 STBY pin: GPIO23");
+    ESP_LOGI(TAG, "Wi-Fi mode: AP responder for ESP-NOW + FTM distance measurements");
 
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {

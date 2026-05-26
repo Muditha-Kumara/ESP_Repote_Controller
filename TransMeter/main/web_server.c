@@ -82,19 +82,19 @@ static const char index_html[] =
     "<div class='label'>Touch control pad</div>"
     "<div id='pad' class='pad'><div class='glow'></div><div id='puck' class='puck'><div><small>BOAT</small>GO</div></div></div>"
     "<div class='controls'><button class='arm' id='armBtn'>ARM BOAT</button><button class='stop' id='stopBtn'>STOP</button></div>"
-    "<div class='hint'>Up and down control thrust. Left and right control steering. Release to go back to center.</div>"
+    "<div class='hint'>Up and down control forward speed. Left and right bias the propellers so the boat turns by differential thrust.</div>"
     "</div></section>"
     "<section class='card'><div class='inner'>"
     "<div class='label'>Live status</div>"
     "<div class='stats'>"
-    "<div class='stat'><div class='label'>Thrust motor</div><div class='value' id='throttleTxt'>0%</div></div>"
-    "<div class='stat'><div class='label'>Steering motor</div><div class='value' id='steerTxt'>0%</div></div>"
-    "<div class='stat'><div class='label'>Thrust direction</div><div class='value' id='leftTxt'>Stop</div></div>"
-    "<div class='stat'><div class='label'>Steer direction</div><div class='value' id='rightTxt'>Center</div></div>"
+    "<div class='stat'><div class='label'>Forward input</div><div class='value' id='throttleTxt'>0%</div></div>"
+    "<div class='stat'><div class='label'>Turn input</div><div class='value' id='steerTxt'>0%</div></div>"
+    "<div class='stat'><div class='label'>Left propeller</div><div class='value' id='leftTxt'>Stop</div></div>"
+    "<div class='stat'><div class='label'>Right propeller</div><div class='value' id='rightTxt'>Stop</div></div>"
     "</div>"
     "<div class='motor-bars'>"
-    "<div><div class='label'>Thrust level</div><div class='bar'><div id='leftBar' class='fill'></div><span id='leftBarTxt'>0</span></div></div>"
-    "<div><div class='label'>Steering level</div><div class='bar'><div id='rightBar' class='fill'></div><span id='rightBarTxt'>0</span></div></div>"
+    "<div><div class='label'>Left propeller speed</div><div class='bar'><div id='leftBar' class='fill'></div><span id='leftBarTxt'>0</span></div></div>"
+    "<div><div class='label'>Right propeller speed</div><div class='bar'><div id='rightBar' class='fill'></div><span id='rightBarTxt'>0</span></div></div>"
     "</div>"
     "<div class='mini'>"
     "<div class='chip' id='wifiChip'>WiFi: waiting</div>"
@@ -119,8 +119,9 @@ static const char index_html[] =
     "function setConnected(ok,text){connDot.className='dot'+(ok?' on':'');connText.textContent=text;}"
     "function motorStyle(value){return clamp(Math.abs(value),0,127)/127*100+'%';}"
     "function motorText(value){if(value===0) return 'Stop'; return value>0 ? 'Forward' : 'Reverse';}"
-    "function steerText(value){if(value===0) return 'Center'; return value>0 ? 'Right' : 'Left';}"
-    "function render(){throttleTxt.textContent=Math.abs(throttle)+'%'; steerTxt.textContent=Math.abs(steer)+'%'; leftTxt.textContent=motorText(throttle); rightTxt.textContent=steerText(steer); leftBar.style.width=motorStyle(throttle); rightBar.style.width=motorStyle(steer); leftBarTxt.textContent=Math.abs(throttle); rightBarTxt.textContent=Math.abs(steer); modeChip.textContent='Mode: '+(armed?'armed':'safe');}"
+    "function leftMotor(){return clamp(throttle+steer,-127,127);}"
+    "function rightMotor(){return clamp(throttle-steer,-127,127);}"
+    "function render(){const leftSpeed=leftMotor(), rightSpeed=rightMotor(); throttleTxt.textContent=Math.abs(throttle)+'%'; steerTxt.textContent=Math.abs(steer)+'%'; leftTxt.textContent=motorText(leftSpeed); rightTxt.textContent=motorText(rightSpeed); leftBar.style.width=motorStyle(leftSpeed); rightBar.style.width=motorStyle(rightSpeed); leftBarTxt.textContent=Math.abs(leftSpeed); rightBarTxt.textContent=Math.abs(rightSpeed); modeChip.textContent='Mode: '+(armed?'armed':'safe');}"
     "function sendState(force){if(!ws||ws.readyState!==1) return; const now=Date.now(); if(!force && now-lastSend<40) return; lastSend=now; const msg={type:'drive',throttle:throttle|0,steer:steer|0,armed:armed?1:0}; ws.send(JSON.stringify(msg));}"
     "function stopBoat(){throttle=0;steer=0;armed=false;render();sendState(true); armBtn.textContent='ARM BOAT';}"
     "function setFromPointer(ev){const r=pad.getBoundingClientRect(); const x=clamp((ev.clientX-r.left)/r.width,0,1)*2-1; const y=clamp((ev.clientY-r.top)/r.height,0,1)*2-1; steer=Math.round(x*127); throttle=Math.round(-y*127); const puckX=((x*0.5)+0.5)*(r.width-96)+48; const puckY=((y*0.5)+0.5)*(r.height-96)+48; puck.style.left=puckX+'px'; puck.style.top=puckY+'px'; render(); sendState(false);}"
@@ -152,13 +153,28 @@ static int8_t clamp_int8(int value)
     return (int8_t)clamp_int(value, -127, 127);
 }
 
+static int8_t speed_to_direction(int8_t speed)
+{
+    if (speed > 0)
+    {
+        return 1;
+    }
+    if (speed < 0)
+    {
+        return -1;
+    }
+    return 0;
+}
+
 static void command_to_motor(int16_t throttle, int16_t steer, motor_control_t *motor_data)
 {
-    motor_data->motor1_speed = clamp_int8((clamp_int(throttle, -100, 100) * 127) / 100);
-    motor_data->motor1_direction = (motor_data->motor1_speed > 0) ? 1 : (motor_data->motor1_speed < 0 ? -1 : 0);
+    int16_t throttle_pct = clamp_int(throttle, -100, 100);
+    int16_t steer_pct = clamp_int(steer, -100, 100);
+    int16_t left_pct = clamp_int(throttle_pct + steer_pct, -100, 100);
+    int16_t right_pct = clamp_int(throttle_pct - steer_pct, -100, 100);
 
-    motor_data->motor2_speed = clamp_int8((clamp_int(abs(steer), 0, 100) * 127) / 100);
-    motor_data->motor2_direction = (steer > 0) ? 1 : (steer < 0 ? -1 : 0);
+    motor_data->motor1_speed = clamp_int8((left_pct * 127) / 100);
+    motor_data->motor2_speed = clamp_int8((right_pct * 127) / 100);
     motor_data->timestamp = esp_log_timestamp();
 }
 
@@ -196,8 +212,6 @@ static void update_control_state(int16_t throttle, int16_t steer, uint8_t armed)
     {
         current_motor_data.motor1_speed = 0;
         current_motor_data.motor2_speed = 0;
-        current_motor_data.motor1_direction = 0;
-        current_motor_data.motor2_direction = 0;
     }
 }
 
@@ -216,9 +230,9 @@ static esp_err_t http_api_status_handler(httpd_req_t *req)
              current_steer,
              current_armed,
              current_motor_data.motor1_speed,
-             current_motor_data.motor1_direction,
+             speed_to_direction(current_motor_data.motor1_speed),
              current_motor_data.motor2_speed,
-             current_motor_data.motor2_direction,
+             speed_to_direction(current_motor_data.motor2_speed),
              (unsigned long)current_motor_data.timestamp,
              current_settings.wifi_ssid,
              current_settings.long_range_enabled,

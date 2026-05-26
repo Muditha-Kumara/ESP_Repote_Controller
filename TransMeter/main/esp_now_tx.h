@@ -42,7 +42,7 @@ int esp_now_tx_send(const motor_control_t *data);
 uint32_t esp_now_tx_get_stats(void);
 
 /**
- * Get latest receiver link metrics (RSSI and RTT-based distance estimate)
+ * Get latest receiver link metrics (RSSI and FTM-based distance estimate)
  */
 void esp_now_tx_get_link_metrics(link_metrics_t *metrics);
 

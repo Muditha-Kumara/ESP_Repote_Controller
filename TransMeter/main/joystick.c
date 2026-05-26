@@ -87,19 +87,6 @@ static int8_t axis_to_int8(int16_t value)
     return (int8_t)scaled;
 }
 
-static int8_t get_direction(int8_t speed)
-{
-    if (speed > 0)
-    {
-        return 1;
-    }
-    if (speed < 0)
-    {
-        return -1;
-    }
-    return 0;
-}
-
 static int8_t clamp_motor_value(int16_t value)
 {
     if (value > 127)
@@ -502,9 +489,7 @@ int joystick_read(motor_control_t *motor_data)
     if (!xbox_connected)
     {
         motor_data->motor1_speed = 0;
-        motor_data->motor1_direction = 0;
         motor_data->motor2_speed = 0;
-        motor_data->motor2_direction = 0;
         motor_data->timestamp = esp_log_timestamp();
         return -1;
     }
@@ -512,17 +497,13 @@ int joystick_read(motor_control_t *motor_data)
     if (!b_button_pressed)
     {
         motor_data->motor1_speed = 0;
-        motor_data->motor1_direction = 0;
         motor_data->motor2_speed = 0;
-        motor_data->motor2_direction = 0;
         motor_data->timestamp = esp_log_timestamp();
         return 0;
     }
 
     motor_data->motor1_speed = latest_left_motor;
-    motor_data->motor1_direction = get_direction(latest_left_motor);
     motor_data->motor2_speed = latest_right_motor;
-    motor_data->motor2_direction = get_direction(latest_right_motor);
     motor_data->timestamp = esp_log_timestamp();
     return 0;
 }

@@ -31,7 +31,7 @@ static esp_err_t ensure_peer_exists(const uint8_t *peer_addr)
     esp_now_peer_info_t peer = {0};
     memcpy(peer.peer_addr, peer_addr, ESP_NOW_ETH_ALEN);
     peer.channel = 1;
-    peer.ifidx = WIFI_IF_STA;
+    peer.ifidx = WIFI_IF_AP;
     peer.encrypt = false;
     return esp_now_add_peer(&peer);
 }
@@ -97,9 +97,9 @@ static void recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, i
     }
 
     /* Print parsed motor control values */
-    ESP_LOGI(TAG, "motor1: speed=%d dir=%d; motor2: speed=%d dir=%d; ts=%u",
-             latest_command.motor1_speed, latest_command.motor1_direction,
-             latest_command.motor2_speed, latest_command.motor2_direction,
+    ESP_LOGI(TAG, "motor1 speed=%d; motor2 speed=%d; ts=%u",
+             latest_command.motor1_speed,
+             latest_command.motor2_speed,
              latest_command.timestamp);
 
     /* Also dump raw payload bytes */
@@ -114,22 +114,36 @@ esp_err_t esp_now_rx_init(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    esp_netif_create_default_wifi_sta();
+    esp_netif_create_default_wifi_ap();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+
+    wifi_config_t ap_config = {0};
+    snprintf((char *)ap_config.ap.ssid, sizeof(ap_config.ap.ssid), "BoatReceiver");
+    ap_config.ap.ssid_len = strlen((const char *)ap_config.ap.ssid);
+    ap_config.ap.channel = 1;
+    ap_config.ap.max_connection = 1;
+    ap_config.ap.authmode = WIFI_AUTH_OPEN;
+    ap_config.ap.ssid_hidden = 1;
+
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
     ESP_ERROR_CHECK(esp_wifi_start());
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     ESP_ERROR_CHECK(esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE));
-    ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_LR));
+    ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_LR));
+
+#if CONFIG_ESP_WIFI_FTM_ENABLE
+    ESP_ERROR_CHECK(esp_wifi_ftm_resp_set_offset(0));
+#endif
 
     ESP_ERROR_CHECK(esp_now_init());
     ESP_ERROR_CHECK(esp_now_register_recv_cb(recv_cb));
 
     last_seen_ms = now_ms();
-    ESP_LOGI(TAG, "ESP-NOW receiver ready on channel 1 with LR protocol enabled");
+    ESP_LOGI(TAG, "ESP-NOW receiver ready on channel 1 as hidden AP + FTM responder");
     return ESP_OK;
 }
 

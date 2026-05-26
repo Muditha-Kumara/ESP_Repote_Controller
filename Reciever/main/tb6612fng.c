@@ -11,12 +11,12 @@ static const char *TAG = "TB6612FNG";
 
 // Receiver pin map constrained to the pins you provided.
 // PWM and standby use the least risky GPIOs from the set.
-#define THRUST_PWM_GPIO  GPIO_NUM_21
-#define THRUST_IN1_GPIO   GPIO_NUM_18
-#define THRUST_IN2_GPIO   GPIO_NUM_19
-#define STEER_PWM_GPIO    GPIO_NUM_22
-#define STEER_IN1_GPIO    GPIO_NUM_4
-#define STEER_IN2_GPIO    GPIO_NUM_5
+#define MOTOR1_PWM_GPIO GPIO_NUM_21
+#define MOTOR1_IN1_GPIO GPIO_NUM_18
+#define MOTOR1_IN2_GPIO GPIO_NUM_19
+#define MOTOR2_PWM_GPIO GPIO_NUM_22
+#define MOTOR2_IN1_GPIO GPIO_NUM_4
+#define MOTOR2_IN2_GPIO GPIO_NUM_5
 #define TB6612_STBY_GPIO  GPIO_NUM_23
 
 #define PWM_FREQ_HZ       20000
@@ -44,15 +44,9 @@ static void set_pwm(ledc_channel_t channel, int signed_speed)
     ledc_update_duty(LEDC_LOW_SPEED_MODE, channel);
 }
 
-static int signed_speed_from_command(int8_t speed, int8_t direction)
+static int signed_speed_from_command(int8_t speed)
 {
     int signed_speed = speed;
-
-    if (direction < 0) {
-        signed_speed = -abs(signed_speed);
-    } else if (direction > 0) {
-        signed_speed = abs(signed_speed);
-    }
 
     if (signed_speed > 127) {
         signed_speed = 127;
@@ -78,10 +72,10 @@ static void apply_motor(ledc_channel_t channel, gpio_num_t in1, gpio_num_t in2, 
 void tb6612fng_init(void)
 {
     gpio_config_t out_config = {
-        .pin_bit_mask = (1ULL << THRUST_IN1_GPIO) |
-                        (1ULL << THRUST_IN2_GPIO) |
-                        (1ULL << STEER_IN1_GPIO) |
-                        (1ULL << STEER_IN2_GPIO) |
+        .pin_bit_mask = (1ULL << MOTOR1_IN1_GPIO) |
+                        (1ULL << MOTOR1_IN2_GPIO) |
+                        (1ULL << MOTOR2_IN1_GPIO) |
+                        (1ULL << MOTOR2_IN2_GPIO) |
                         (1ULL << TB6612_STBY_GPIO),
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
@@ -102,7 +96,7 @@ void tb6612fng_init(void)
     ESP_ERROR_CHECK(ledc_timer_config(&timer_config));
 
     ledc_channel_config_t thrust_channel = {
-        .gpio_num = THRUST_PWM_GPIO,
+        .gpio_num = MOTOR1_PWM_GPIO,
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .channel = LEDC_CHANNEL_0,
         .intr_type = LEDC_INTR_DISABLE,
@@ -113,7 +107,7 @@ void tb6612fng_init(void)
     ESP_ERROR_CHECK(ledc_channel_config(&thrust_channel));
 
     ledc_channel_config_t steer_channel = {
-        .gpio_num = STEER_PWM_GPIO,
+        .gpio_num = MOTOR2_PWM_GPIO,
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .channel = LEDC_CHANNEL_1,
         .intr_type = LEDC_INTR_DISABLE,
@@ -127,9 +121,9 @@ void tb6612fng_init(void)
     tb6612fng_stop();
 
     ESP_LOGI(TAG,
-             "TB6612FNG ready: thrust PWM=%d IN1=%d IN2=%d, steer PWM=%d IN1=%d IN2=%d, STBY=%d",
-             THRUST_PWM_GPIO, THRUST_IN1_GPIO, THRUST_IN2_GPIO,
-             STEER_PWM_GPIO, STEER_IN1_GPIO, STEER_IN2_GPIO,
+             "TB6612FNG ready: motor1 PWM=%d IN1=%d IN2=%d, motor2 PWM=%d IN1=%d IN2=%d, STBY=%d",
+             MOTOR1_PWM_GPIO, MOTOR1_IN1_GPIO, MOTOR1_IN2_GPIO,
+             MOTOR2_PWM_GPIO, MOTOR2_IN1_GPIO, MOTOR2_IN2_GPIO,
              TB6612_STBY_GPIO);
 }
 
@@ -142,18 +136,18 @@ void tb6612fng_apply(const motor_control_t *command)
 
     gpio_set_level(TB6612_STBY_GPIO, 1);
 
-    int thrust_speed = signed_speed_from_command(command->motor1_speed, command->motor1_direction);
-    int steer_speed = signed_speed_from_command(command->motor2_speed, command->motor2_direction);
+    int thrust_speed = signed_speed_from_command(command->motor1_speed);
+    int steer_speed = signed_speed_from_command(command->motor2_speed);
 
-    apply_motor(LEDC_CHANNEL_0, THRUST_IN1_GPIO, THRUST_IN2_GPIO, thrust_speed);
-    apply_motor(LEDC_CHANNEL_1, STEER_IN1_GPIO, STEER_IN2_GPIO, steer_speed);
+    apply_motor(LEDC_CHANNEL_0, MOTOR1_IN1_GPIO, MOTOR1_IN2_GPIO, thrust_speed);
+    apply_motor(LEDC_CHANNEL_1, MOTOR2_IN1_GPIO, MOTOR2_IN2_GPIO, steer_speed);
 }
 
 void tb6612fng_stop(void)
 {
     set_pwm(LEDC_CHANNEL_0, 0);
     set_pwm(LEDC_CHANNEL_1, 0);
-    set_direction(THRUST_IN1_GPIO, THRUST_IN2_GPIO, 0);
-    set_direction(STEER_IN1_GPIO, STEER_IN2_GPIO, 0);
+    set_direction(MOTOR1_IN1_GPIO, MOTOR1_IN2_GPIO, 0);
+    set_direction(MOTOR2_IN1_GPIO, MOTOR2_IN2_GPIO, 0);
     gpio_set_level(TB6612_STBY_GPIO, 0);
 }
