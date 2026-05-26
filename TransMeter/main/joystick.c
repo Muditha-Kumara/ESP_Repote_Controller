@@ -53,6 +53,7 @@ static usb_device_handle_t dev_hdl;
 static usb_transfer_t *in_transfer;
 static bool usb_ready = false;
 static bool xbox_connected = false;
+static bool b_button_pressed = false;
 static int8_t latest_lx = 0;
 static int8_t latest_ly = 0;
 static int8_t latest_rx = 0;
@@ -225,6 +226,8 @@ static void hid_transfer_cb(usb_transfer_t *transfer)
             }
         }
 
+        b_button_pressed = (report.buttons_high & XBOX_BTN_B) != 0;
+
         latest_lx = lx;
         latest_ly = ly;
         latest_rx = axis_to_int8(report.rx);
@@ -393,6 +396,7 @@ static void client_event_cb(const usb_host_client_event_msg_t *event_msg, void *
         {
             ESP_LOGW(TAG, "Xbox controller disconnected");
             xbox_connected = false;
+            b_button_pressed = false;
             latest_lx = 0;
             latest_ly = 0;
             teleplot_send_i32("xbox/connected", 0);
@@ -505,6 +509,16 @@ int joystick_read(motor_control_t *motor_data)
         return -1;
     }
 
+    if (!b_button_pressed)
+    {
+        motor_data->motor1_speed = 0;
+        motor_data->motor1_direction = 0;
+        motor_data->motor2_speed = 0;
+        motor_data->motor2_direction = 0;
+        motor_data->timestamp = esp_log_timestamp();
+        return 0;
+    }
+
     motor_data->motor1_speed = latest_left_motor;
     motor_data->motor1_direction = get_direction(latest_left_motor);
     motor_data->motor2_speed = latest_right_motor;
@@ -555,6 +569,7 @@ void joystick_deinit(void)
 
     usb_ready = false;
     xbox_connected = false;
+    b_button_pressed = false;
     latest_lx = 0;
     latest_ly = 0;
     latest_left_motor = 0;
