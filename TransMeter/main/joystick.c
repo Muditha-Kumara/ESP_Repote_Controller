@@ -55,6 +55,8 @@ static bool usb_ready = false;
 static bool xbox_connected = false;
 static int8_t latest_lx = 0;
 static int8_t latest_ly = 0;
+static int8_t latest_rx = 0;
+static int8_t latest_ry = 0;
 static int8_t latest_left_motor = 0;
 static int8_t latest_right_motor = 0;
 static xbox360_hid_report_t prev_report = {0};
@@ -225,6 +227,8 @@ static void hid_transfer_cb(usb_transfer_t *transfer)
 
         latest_lx = lx;
         latest_ly = ly;
+        latest_rx = axis_to_int8(report.rx);
+        latest_ry = axis_to_int8(report.ry);
         latest_left_motor = left_motor;
         latest_right_motor = right_motor;
 
@@ -244,6 +248,14 @@ static void hid_transfer_cb(usb_transfer_t *transfer)
         if (report.rt != prev_report.rt)
         {
             teleplot_send_i32("xbox/rt", report.rt);
+        }
+        if (latest_rx != axis_to_int8(prev_report.rx))
+        {
+            teleplot_send_i32("xbox/rx", latest_rx);
+        }
+        if (latest_ry != axis_to_int8(prev_report.ry))
+        {
+            teleplot_send_i32("xbox/ry", latest_ry);
         }
 
         prev_report = report;
