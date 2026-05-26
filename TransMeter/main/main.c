@@ -16,12 +16,10 @@
 static const char *TAG = "TransMeter";
 
 // Configuration constants
-#define WIFI_SSID "SLEngineers"
-#define WIFI_PASSWORD "slengnet1"
 #define AP_SSID "Binaru"
 #define AP_PASSWORD "binaru123"
 #define MDNS_HOSTNAME "transmeter"
-#define WIFI_CHANNEL 11
+#define WIFI_CHANNEL 1
 
 // Receiver MAC address (modify as needed)
 // This should be the MAC address of your receiver device
@@ -88,21 +86,6 @@ static void remote_control_task(void *pvParameters)
 }
 
 /**
- * Monitor WiFi connection
- */
-static void wifi_monitor_task(void *pvParameters)
-{
-    ESP_LOGI(TAG, "WiFi monitor task started");
-
-    while (1) {
-        if (wifi_is_connected()) {
-            ESP_LOGI(TAG, "WiFi connected, IP: %s", wifi_get_local_ip());
-        }
-        vTaskDelay(pdMS_TO_TICKS(30000));  // Check every 30 seconds
-    }
-}
-
-/**
  * Application initialization
  */
 void app_main(void)
@@ -110,7 +93,8 @@ void app_main(void)
     ESP_LOGI(TAG, "========== Remote Controller Transmitter Initialized ==========");
     ESP_LOGI(TAG, "FW Version: 1.0.0");
     ESP_LOGI(TAG, "ESP-NOW Long Range Mode: ENABLED");
-    ESP_LOGI(TAG, "Control Mode: WebSocket drive pad");
+    ESP_LOGI(TAG, "WiFi Mode: SoftAP only");
+    ESP_LOGI(TAG, "Control Mode: WebSocket drive pad over AP");
     ESP_LOGI(TAG, "Build Date: %s %s", __DATE__, __TIME__);
 
     // Initialize NVS (Non-Volatile Storage)
@@ -122,30 +106,27 @@ void app_main(void)
     }
 
     // Initialize WiFi and mDNS
-    ESP_LOGI(TAG, "Initializing WiFi (%s)...", WIFI_SSID);
-    if (wifi_init(WIFI_SSID, WIFI_PASSWORD, AP_SSID, AP_PASSWORD) != 0) {
+    ESP_LOGI(TAG, "Initializing SoftAP (%s)...", AP_SSID);
+    if (wifi_init(AP_SSID, AP_PASSWORD) != 0)
+    {
         ESP_LOGE(TAG, "Failed to initialize WiFi");
         return;
     }
     ESP_LOGI(TAG, "✓ WiFi initialization started");
 
-    // Initialize mDNS early so it is ready when the STA gets an IP address.
+    // Initialize mDNS early so it is ready when the AP comes up.
     if (wifi_mdns_init(MDNS_HOSTNAME, WEB_SERVER_PORT) != 0)
     {
         ESP_LOGW(TAG, "mDNS startup failed, continuing without hostname discovery");
     }
 
-    // Wait for WiFi connection
-    int retry_count = 0;
-    while (!wifi_is_connected() && retry_count < 50) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-        retry_count++;
+    if (wifi_is_ap_active())
+    {
+        ESP_LOGI(TAG, "✓ SoftAP active: %s", wifi_get_ap_ip());
     }
-
-    if (wifi_is_connected()) {
-        ESP_LOGI(TAG, "✓ WiFi connected: %s", wifi_get_local_ip());
-    } else {
-        ESP_LOGW(TAG, "⚠ WiFi connection timeout, router control unavailable but SoftAP fallback is active");
+    else
+    {
+        ESP_LOGW(TAG, "⚠ SoftAP is not active yet");
     }
 
     // Initialize ESP-NOW
@@ -175,10 +156,8 @@ void app_main(void)
     if (web_server_init(WEB_SERVER_PORT) == 0) {
         ESP_LOGI(TAG, "✓ Web Server started");
         web_server_update_drive_command(0, 0, 0);
-        if (wifi_is_connected()) {
-            ESP_LOGI(TAG, "  Access at: http://%s or http://transmeter.local",
-                     wifi_get_local_ip());
-        }
+        ESP_LOGI(TAG, "  Access at: http://%s or http://transmeter.local",
+                 wifi_get_ap_ip());
         ESP_LOGI(TAG, "  Direct AP access: connect to SSID '%s' and open http://%s",
                  AP_SSID, wifi_get_ap_ip());
     } else {
@@ -192,7 +171,6 @@ void app_main(void)
 
     // Create tasks on CPU 1 so CPU 0 can service WiFi/LwIP and idle watchdog.
     xTaskCreatePinnedToCore(remote_control_task, "RemoteCtrl", 4096, NULL, 5, NULL, 1);
-    xTaskCreatePinnedToCore(wifi_monitor_task, "WiFiMonitor", 2048, NULL, 3, NULL, 1);
 
     ESP_LOGI(TAG, "All tasks created successfully");
 }

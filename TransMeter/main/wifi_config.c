@@ -8,14 +8,9 @@
 
 static const char *TAG = "WIFI_CONFIG";
 
-// WiFi connection status
-static uint8_t wifi_connected = 0;
-static char local_ip[16] = "0.0.0.0";
 static char ap_ip[16] = "192.168.4.1";
 static char ap_ssid[33] = "Binaru";
-static esp_netif_t *sta_netif = NULL;
 static esp_netif_t *ap_netif = NULL;
-static uint8_t mdns_started = 0;
 static uint8_t ap_started = 0;
 
 /**
@@ -24,39 +19,25 @@ static uint8_t ap_started = 0;
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
 {
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        ESP_LOGI(TAG, "WiFi connecting...");
-        esp_wifi_connect();
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        ESP_LOGW(TAG, "WiFi disconnected, retrying...");
-        wifi_connected = 0;
-        if (mdns_started && sta_netif != NULL)
-        {
-            mdns_netif_action(sta_netif, MDNS_EVENT_DISABLE_IP4);
-        }
-        esp_wifi_connect();
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_START) {
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_START)
+    {
         ap_started = 1;
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_STOP) {
+        snprintf(ap_ip, sizeof(ap_ip), "192.168.4.1");
+        ESP_LOGI(TAG, "SoftAP started. IP: %s", ap_ip);
+    }
+    else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_STOP)
+    {
         ap_started = 0;
-    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
-        snprintf(local_ip, sizeof(local_ip), IPSTR, IP2STR(&event->ip_info.ip));
-        ESP_LOGI(TAG, "WiFi connected! IP: %s", local_ip);
-        wifi_connected = 1;
-        if (mdns_started && sta_netif != NULL)
-        {
-            mdns_netif_action(sta_netif, MDNS_EVENT_ANNOUNCE_IP4);
-        }
     }
 }
 
 /**
- * Initialize WiFi connection
+ * Initialize WiFi SoftAP
  */
-int wifi_init(const char *ssid, const char *password, const char *ap_ssid_in, const char *ap_password)
+int wifi_init(const char *ap_ssid_in, const char *ap_password)
 {
-    if (ssid == NULL || password == NULL || ap_ssid_in == NULL || ap_password == NULL) {
+    if (ap_ssid_in == NULL || ap_password == NULL)
+    {
         ESP_LOGE(TAG, "Invalid WiFi credentials");
         return -1;
     }
@@ -78,12 +59,12 @@ int wifi_init(const char *ssid, const char *password, const char *ap_ssid_in, co
         return -1;
     }
 
-    // Create the default WiFi station interface if it does not already exist.
-    static bool sta_netif_created = false;
-    if (!sta_netif_created) {
-        sta_netif = esp_netif_create_default_wifi_sta();
+    // Create the default WiFi AP interface if it does not already exist.
+    static bool ap_netif_created = false;
+    if (!ap_netif_created)
+    {
         ap_netif = esp_netif_create_default_wifi_ap();
-        sta_netif_created = true;
+        ap_netif_created = true;
     }
 
     // Initialize WiFi with default config
@@ -101,12 +82,6 @@ int wifi_init(const char *ssid, const char *password, const char *ap_ssid_in, co
         return -1;
     }
 
-    ret = esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "IP event handler registration failed: %s", esp_err_to_name(ret));
-        return -1;
-    }
-
     wifi_config_t ap_config = {};
     strncpy((char *)ap_config.ap.ssid, ap_ssid, sizeof(ap_config.ap.ssid) - 1);
     strncpy((char *)ap_config.ap.password, ap_password, sizeof(ap_config.ap.password) - 1);
@@ -120,8 +95,8 @@ int wifi_init(const char *ssid, const char *password, const char *ap_ssid_in, co
         return -1;
     }
 
-    // Configure SoftAP first so it is available even if the router never comes up.
-    ret = esp_wifi_set_mode(WIFI_MODE_APSTA);
+    // Configure WiFi as SoftAP-only so ESP-NOW and the web UI work without STA.
+    ret = esp_wifi_set_mode(WIFI_MODE_AP);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "WiFi mode setting failed: %s", esp_err_to_name(ret));
         return -1;
@@ -130,18 +105,6 @@ int wifi_init(const char *ssid, const char *password, const char *ap_ssid_in, co
     ret = esp_wifi_set_config(WIFI_IF_AP, &ap_config);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "SoftAP config failed: %s", esp_err_to_name(ret));
-        return -1;
-    }
-
-    // Configure WiFi connection
-    wifi_config_t wifi_config = {};
-    strncpy((char *)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid) - 1);
-    strncpy((char *)wifi_config.sta.password, password, sizeof(wifi_config.sta.password) - 1);
-    wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-
-    ret = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "WiFi config setting failed: %s", esp_err_to_name(ret));
         return -1;
     }
 
@@ -154,8 +117,8 @@ int wifi_init(const char *ssid, const char *password, const char *ap_ssid_in, co
 
     snprintf(ap_ip, sizeof(ap_ip), "192.168.4.1");
 
-    ESP_LOGI(TAG, "WiFi initialization started. Connecting to SSID: %s", ssid);
-    ESP_LOGI(TAG, "SoftAP fallback ready: %s (password set)", ap_ssid);
+    ESP_LOGI(TAG, "WiFi initialization started in AP-only mode: %s", ap_ssid);
+    ESP_LOGI(TAG, "SoftAP ready: %s (password set)", ap_ssid);
     return 0;
 }
 
@@ -177,14 +140,12 @@ int wifi_mdns_init(const char *hostname, uint16_t port)
         return -1;
     }
 
-    mdns_started = 1;
-
-    if (sta_netif != NULL)
+    if (ap_netif != NULL)
     {
-        ret = mdns_register_netif(sta_netif);
+        ret = mdns_register_netif(ap_netif);
         if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE)
         {
-            ESP_LOGE(TAG, "Failed to register STA netif with mDNS: %s", esp_err_to_name(ret));
+            ESP_LOGE(TAG, "Failed to register AP netif with mDNS: %s", esp_err_to_name(ret));
             return -1;
         }
     }
@@ -210,30 +171,14 @@ int wifi_mdns_init(const char *hostname, uint16_t port)
         return -1;
     }
 
-    if (sta_netif != NULL && wifi_connected)
+    if (ap_netif != NULL)
     {
-        mdns_netif_action(sta_netif, MDNS_EVENT_ENABLE_IP4);
-        mdns_netif_action(sta_netif, MDNS_EVENT_ANNOUNCE_IP4);
+        mdns_netif_action(ap_netif, MDNS_EVENT_ENABLE_IP4);
+        mdns_netif_action(ap_netif, MDNS_EVENT_ANNOUNCE_IP4);
     }
 
     ESP_LOGI(TAG, "mDNS initialized: %s.local", hostname);
     return 0;
-}
-
-/**
- * Get WiFi connection status
- */
-int wifi_is_connected(void)
-{
-    return wifi_connected;
-}
-
-/**
- * Get local IP address
- */
-const char *wifi_get_local_ip(void)
-{
-    return local_ip;
 }
 
 /**
