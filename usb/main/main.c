@@ -3,32 +3,27 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "lwipopts.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "esp_netif.h"
-
-#include "lwip/opt.h"
-#include "lwip/prot/ip.h"
 #include "lwip/ip_addr.h"
 #include "lwip/err.h"
+#include "lwip/lwip_napt.h"
+#include "lwip/prot/ip.h"
 #include "dhcpserver/dhcpserver_options.h"
 #include "usb/usb_host.h"
-
 #include "iot_usbh_rndis.h"
 #include "iot_eth.h"
 #include "iot_eth_netif_glue.h"
 #include "iot_usbh_cdc.h"
 
-/* ESP-IDF v6.0.1: NAPT functions exist in the compiled LwIP library
-   but the public header may not declare them. Provide our own externs. */
-extern void ip_napt_enable(u32_t addr, int enable);
-extern err_t ip_portmap_add(u8_t proto, u32_t maddr, u16_t mport, u32_t daddr, u16_t dport);
-
-#ifndef IP_PROTO_UDP
-#define IP_PROTO_UDP 17
-#endif
+/* Forward declarations for NAPT functions (workaround for missing prototypes) */
+void ip_napt_enable(uint32_t addr, int enable);
+err_t ip_portmap_add(uint8_t proto, uint32_t maddr, uint16_t mport,
+                     uint32_t daddr, uint16_t dport);
 
 static const char *TAG = "WIFI_USB_BRIDGE";
 
@@ -43,10 +38,7 @@ static const char *TAG = "WIFI_USB_BRIDGE";
 #define RNDIS_IP_C 0
 #define RNDIS_IP_D 1
 
-/* Luckfox static IP — configure this manually on the Luckfox:
-   ip addr add 172.32.0.93/24 dev usb0
-   ip route add default via 172.32.0.1 dev usb0
-*/
+/* Luckfox static IP (must be configured manually on Luckfox) */
 #define LUCKFOX_IP_A 172
 #define LUCKFOX_IP_B 32
 #define LUCKFOX_IP_C 0
@@ -89,6 +81,30 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     }
 }
 
+/* Wait for RNDIS netif to obtain a valid MAC address (meaning USB device is enumerated and link is up) */
+static void wait_for_rndis_mac(esp_netif_t *rndis_netif)
+{
+    uint8_t mac[6];
+    int retries = 0;
+    const int max_retries = 150; // 15 seconds (100ms each)
+    while (retries < max_retries)
+    {
+        if (esp_netif_get_mac(rndis_netif, mac) == ESP_OK)
+        {
+            // Check if MAC is not all zeros
+            if (!(mac[0] == 0 && mac[1] == 0 && mac[2] == 0 && mac[3] == 0 && mac[4] == 0 && mac[5] == 0))
+            {
+                ESP_LOGI(TAG, "RNDIS netif is ready with MAC %02x:%02x:%02x:%02x:%02x:%02x",
+                         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+                return;
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+        retries++;
+    }
+    ESP_LOGW(TAG, "RNDIS netif did not get a valid MAC within timeout");
+}
+
 void app_main(void)
 {
     /* 1. Core init */
@@ -122,7 +138,6 @@ void app_main(void)
     /* 3. Enable NAPT on STA interface */
     esp_netif_ip_info_t sta_ip;
     ESP_ERROR_CHECK(esp_netif_get_ip_info(sta_netif, &sta_ip));
-
     ip_napt_enable(sta_ip.ip.addr, 1);
     ESP_LOGI(TAG, "NAPT enabled on STA interface (%s)", esp_netif_get_desc(sta_netif));
 
@@ -176,24 +191,40 @@ void app_main(void)
         .ip = ESP_IP4ADDR_INIT(8, 8, 8, 8),
     };
     ESP_ERROR_CHECK(esp_netif_set_dns_info(rndis_netif, ESP_NETIF_DNS_MAIN, &dns));
-
     ESP_ERROR_CHECK(esp_netif_dhcps_start(rndis_netif));
-    ESP_LOGI(TAG, "RNDIS bridge ready at %d.%d.%d.%d", RNDIS_IP_A, RNDIS_IP_B, RNDIS_IP_C, RNDIS_IP_D);
+    ESP_LOGI(TAG, "RNDIS bridge configured at %d.%d.%d.%d",
+             RNDIS_IP_A, RNDIS_IP_B, RNDIS_IP_C, RNDIS_IP_D);
 
-    /* 8. WireGuard port forward: WAN:51820 -> Luckfox:51820 */
+    /* 8. Wait for RNDIS netif to have a valid MAC (i.e., USB device enumerated) */
+    wait_for_rndis_mac(rndis_netif);
+    vTaskDelay(pdMS_TO_TICKS(2000)); // extra delay for ARP resolution
+
+    /* 9. WireGuard port forward: WAN:51820 -> Luckfox:51820 (retry loop) */
     ip4_addr_t luckfox_ip;
     IP4_ADDR(&luckfox_ip, LUCKFOX_IP_A, LUCKFOX_IP_B, LUCKFOX_IP_C, LUCKFOX_IP_D);
-    err_t err = ip_portmap_add(IP_PROTO_UDP, sta_ip.ip.addr, WG_PORT, luckfox_ip.addr, WG_PORT);
+    err_t err = ERR_MEM;
+    for (int attempt = 1; attempt <= 5; attempt++)
+    {
+        err = ip_portmap_add(IP_PROTO_UDP,
+                             sta_ip.ip.addr,
+                             htons(WG_PORT),
+                             luckfox_ip.addr,
+                             htons(WG_PORT));
+        if (err == ERR_OK)
+        {
+            ESP_LOGI(TAG, "WireGuard UDP/%d forwarded to Luckfox " IPSTR ":%d (attempt %d)",
+                     WG_PORT, IP2STR(&luckfox_ip), WG_PORT, attempt);
+            break;
+        }
+        ESP_LOGW(TAG, "portmap add attempt %d failed (err=%d), retrying in 1s", attempt, err);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
     if (err != ERR_OK)
     {
-        ESP_LOGE(TAG, "WireGuard portmap FAILED (err=%d). Tables may be full or not compiled in.", err);
-    }
-    else
-    {
-        ESP_LOGI(TAG, "WireGuard UDP/%d forwarded to Luckfox %d.%d.%d.%d:%d",
-                 WG_PORT, LUCKFOX_IP_A, LUCKFOX_IP_B, LUCKFOX_IP_C, LUCKFOX_IP_D, WG_PORT);
+        ESP_LOGE(TAG, "WireGuard portmap FAILED after retries. Check CONFIG_LWIP_IPV4_NAPT_PORTMAP_MAX (should be >=16) and routing.");
     }
 
+    /* 10. Main loop – just keep the task alive */
     while (1)
     {
         vTaskDelay(pdMS_TO_TICKS(5000));
